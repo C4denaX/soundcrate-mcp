@@ -1,6 +1,6 @@
 {
   "name": "soundcrate-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "SoundCloud playlists, curated with Claude. Local, zero-dependency MCP server (stdio) for the Claude desktop app.",
   "type": "module",
   "main": "server.mjs",
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server.mjs",
     "login": "node login.mjs",
-    "test": "node tests/test.mjs && node tests/test2.mjs && node tests/test3.mjs"
+    "test": "node tests/test.mjs && node tests/test2.mjs && node tests/test3.mjs && node tests/test4.mjs"
   },
   "keywords": [
     "mcp",

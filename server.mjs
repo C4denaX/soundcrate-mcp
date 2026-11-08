@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SoundCrate MCP: servidor MCP local (stdio) para SoundCloud. Sin dependencias externas.
-// Herramientas: buscar pistas, ver pistas y playlists, crear playlists y añadir/quitar/sustituir pistas.
+// Herramientas: buscar y descubrir pistas, artistas, playlists y emisoras; crear playlists y añadir/quitar/sustituir pistas.
 // No incluye descarga ni URLs de streaming (las condiciones de la API lo prohíben) ni borrado de playlists.
 
 import readline from "node:readline";
@@ -49,8 +49,12 @@ async function token() {
 }
 
 // ---------- API ----------
+const API_ORIGIN = new URL(lib.API).origin;
+
 async function sc(path, { method = "GET", body, retry = true } = {}) {
   const url = path.startsWith("http") ? path : lib.API + path;
+  // El token solo viaja a la API de SoundCloud: un cursor o next_href manipulado no puede mandarlo a otro sitio.
+  if (new URL(url).origin !== API_ORIGIN) throw new Error(`Dirección no permitida (solo ${API_ORIGIN}).`);
   const res = await deps.fetch(url, {
     method,
     headers: {
@@ -73,28 +77,142 @@ async function sc(path, { method = "GET", body, retry = true } = {}) {
 
 const coll = (b) => (b && Array.isArray(b.collection) ? b.collection : Array.isArray(b) ? b : []);
 const mmss = (ms) => (ms ? `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}` : null);
+// Acepta "123" o una URN ("soundcloud:tracks:123"). La API está migrando de id numérico a URN.
+const idOf = (x) => String(x ?? "").trim().match(/^(?:soundcloud:[a-z-]+:)?(\d+)$/)?.[1] ?? null;
+const ids = (arr) => (arr || []).map(idOf).filter(Boolean);
+const rid = (o) => (o?.id != null ? String(o.id) : idOf(o?.urn) ?? o?.urn ?? null);
+const releaseDate = (t) =>
+  t.release_year ? [t.release_year, t.release_month, t.release_day].filter(Boolean).map((n, i) => (i ? String(n).padStart(2, "0") : n)).join("-") : null;
+
+// Tonalidad de SoundCloud ("F:min", "C#:maj"…) a notación Camelot ("4A", "3B"…), la que se usa para mezclar en armonía.
+const ENHARMONIC = { "C#": "Db", "D#": "Eb", "F#": "Gb", "G#": "Ab", "A#": "Bb" };
+const CAMELOT = {
+  min: { Ab: 1, Eb: 2, Bb: 3, F: 4, C: 5, G: 6, D: 7, A: 8, E: 9, B: 10, Gb: 11, Db: 12 },
+  maj: { B: 1, Gb: 2, Db: 3, Ab: 4, Eb: 5, Bb: 6, F: 7, C: 8, G: 9, D: 10, A: 11, E: 12 },
+};
+function camelot(k) {
+  const m = String(k || "").trim().match(/^([A-G][b#]?):?\s*(min|maj)/i);
+  if (!m) return null;
+  const note = ENHARMONIC[m[1]] || m[1];
+  const mode = m[2].toLowerCase();
+  const n = CAMELOT[mode][note];
+  return n ? `${n}${mode === "min" ? "A" : "B"}` : null;
+}
+
+const cleanUrl = (u) => (u ? String(u).split("?")[0] : null);
+
 const slimTrack = (t) => ({
-  id: String(t.id),
+  id: rid(t),
   title: t.title,
   user: t.user?.username,
+  ...(t.metadata_artist ? { artist: t.metadata_artist } : {}),
   access: t.access, // playable | preview | blocked: restricción vista por la app, no por la cuenta (con Go+ suelen sonar)
   duration: mmss(t.duration),
+  bpm: t.bpm ? Math.round(t.bpm * 10) / 10 : null,
+  key: t.key_signature || null,
+  camelot: camelot(t.key_signature),
   genre: t.genre || null,
+  ...(t.tag_list ? { tags: String(t.tag_list).slice(0, 160) } : {}),
   label: t.label_name || null,
-  release_year: t.release_year || null,
+  release: releaseDate(t),
+  ...(t.isrc ? { isrc: t.isrc } : {}),
+  uploaded: t.created_at ? String(t.created_at).slice(0, 10).replace(/\//g, "-") : null,
   plays: t.playback_count ?? null,
-  url: t.permalink_url,
+  likes: t.favoritings_count ?? null,
+  reposts: t.reposts_count ?? null,
+  url: cleanUrl(t.permalink_url),
 });
 const slimPlaylist = (p) => ({
-  id: String(p.id),
+  id: rid(p),
   title: p.title,
+  ...(p.user?.username ? { user: p.user.username } : {}),
   sharing: p.sharing,
   track_count: p.track_count,
-  url: p.permalink_url,
+  url: cleanUrl(p.permalink_url),
 });
-const ids = (arr) => (arr || []).map((x) => String(x).trim()).filter((x) => /^\d+$/.test(x));
+const slimStation = (p) => ({
+  id: p.urn,
+  title: p.title,
+  ...(p.description ? { description: String(p.description).slice(0, 200) } : {}),
+  track_count: p.track_count ?? null,
+  url: cleanUrl(p.permalink_url),
+});
+const slimUser = (u) => ({
+  id: rid(u),
+  username: u.username,
+  ...(u.full_name ? { name: u.full_name } : {}),
+  ...(u.city || u.country ? { location: [u.city, u.country].filter(Boolean).join(", ") } : {}),
+  followers: u.followers_count ?? null,
+  tracks: u.track_count ?? null,
+  url: cleanUrl(u.permalink_url),
+});
 
 const ALL_ACCESS = "access=playable%2Cpreview%2Cblocked";
+const clamp = (n, def, max = 200) => Math.min(max, Math.max(1, Number.isFinite(+n) && n != null ? Math.floor(+n) : def));
+
+// Una página de una colección. cursor = next_cursor de una llamada anterior (sc() comprueba que sea de la API).
+async function page(path, params, { limit, cursor, def = 20 }) {
+  if (cursor) return pageOut(await sc(String(cursor)));
+  const q = new URLSearchParams({ ...params, limit: String(clamp(limit, def)), linked_partitioning: "true" });
+  return pageOut(await sc(`${path}?${q}`));
+}
+const pageOut = (b) => ({ items: coll(b), next_cursor: b?.next_href || null });
+
+const num = (x) => (x == null || x === "" || !Number.isFinite(+x) ? null : +x);
+const list = (x) => (Array.isArray(x) ? x : x ? String(x).split(",") : []).map((s) => String(s).trim()).filter(Boolean);
+const day = (x) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(x))) throw new Error(`Fecha no válida: ${x} (usa AAAA-MM-DD).`);
+  return String(x);
+};
+// Rango "campo[from]/campo[to]" de la búsqueda de pistas.
+function range(p, field, from, to, fmt) {
+  if (from != null && from !== "") p[`${field}[from]`] = fmt(from, false);
+  if (to != null && to !== "") p[`${field}[to]`] = fmt(to, true);
+}
+
+// page() pidiendo también las pistas preview/blocked. Si la API rechaza el parámetro, repite sin él.
+async function pageAccess(path, params, opts, include = true) {
+  if (!include || opts.cursor) return page(path, params, opts);
+  try {
+    return await page(path, { ...params, access: "playable,preview,blocked" }, opts);
+  } catch (e) {
+    if (/límite de peticiones|→ 40[134]/.test(e.message)) throw e;
+    return page(path, params, opts);
+  }
+}
+
+// /me/followings/tracks se pagina con offset, no con next_href: el cursor es la URL de la página siguiente.
+async function followingsTracks(limit, cursor) {
+  let url = cursor ? String(cursor) : null;
+  if (!url) {
+    const q = new URLSearchParams({ limit: String(clamp(limit, 20)), offset: "0", access: "playable,preview,blocked" });
+    url = `${lib.API}/me/followings/tracks?${q}`;
+  }
+  const b = await sc(url);
+  const items = coll(b);
+  let next = b?.next_href || null;
+  if (!next) {
+    const u = new URL(url);
+    const n = +u.searchParams.get("limit") || items.length;
+    if (items.length && items.length >= n) {
+      u.searchParams.set("offset", String((+u.searchParams.get("offset") || 0) + items.length));
+      next = u.href;
+    }
+  }
+  return { tracks: items.map(slimTrack), next_cursor: next };
+}
+
+// Convierte track_id/user_id/playlist_id o una URL de soundcloud.com en id numérico, comprobando el tipo.
+async function resolveId(kind, idValue, url) {
+  if (url) {
+    const o = await sc(`/resolve?${new URLSearchParams({ url })}`);
+    if (o?.kind !== kind) throw new Error(`Esa URL es de un ${o?.kind || "recurso desconocido"}, no de un ${kind}.`);
+    return { id: rid(o), obj: o };
+  }
+  const id = idOf(idValue);
+  if (!id) throw new Error(`Indica un ${kind}_id numérico o una url.`);
+  return { id, obj: null };
+}
 
 async function getPlaylistFull(id) {
   const p = await sc(`/playlists/${id}?${ALL_ACCESS}`);
@@ -113,7 +231,7 @@ async function playlistTrackIds(id) {
         `o crea una playlist nueva con create_playlist.`
     );
   }
-  return { p, ids: tracks.map((t) => String(t.id)) };
+  return { p, ids: tracks.map(rid) };
 }
 
 // Cerrojo por playlist: las operaciones leer-modificar-escribir sobre la misma playlist van en serie.
@@ -145,31 +263,52 @@ async function putTracks(id, list) {
 const TOOLS = {
   search_tracks: {
     description:
-      "Busca pistas en SoundCloud. Devuelve id, título, usuario, sello, año, reproducciones y 'access'. 'access' es la restricción que ve la app registrada, no la cuenta del oyente: playable = la app puede reproducirla entera; preview/blocked = la app no puede, pero con Go+ suelen reproducirse en SoundCloud y se pueden añadir a playlists sin problema. No descartes pistas por ser preview o blocked.",
+      "Busca pistas por texto y/o filtros (géneros, etiquetas, BPM, duración, fecha de subida). Devuelve id, título, usuario, BPM, tonalidad, género, sello, fecha de lanzamiento, reproducciones, likes y 'access'. " +
+      "'access' es la restricción que ve la app registrada, no la cuenta del oyente: playable = la app puede reproducirla entera; preview/blocked = la app no puede, pero con Go+ suelen reproducirse en SoundCloud y se pueden añadir a playlists sin problema. No descartes pistas por ser preview o blocked. " +
+      "bpm y key los rellena quien sube la pista y a menudo faltan: filtrar por BPM deja fuera las pistas sin ese dato. Para seguir, pasa next_cursor como cursor.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Texto de búsqueda (artista y título)" },
-        limit: { type: "integer", minimum: 1, maximum: 50, description: "Máximo de resultados (por defecto 10)" },
+        genres: { type: "array", items: { type: "string" }, description: "Géneros, p. ej. [\"Techno\", \"House\"]" },
+        tags: { type: "array", items: { type: "string" }, description: "Etiquetas de las pistas" },
+        bpm_min: { type: "number" },
+        bpm_max: { type: "number" },
+        duration_min_s: { type: "integer", description: "Duración mínima en segundos" },
+        duration_max_s: { type: "integer", description: "Duración máxima en segundos" },
+        uploaded_after: { type: "string", description: "Fecha de subida desde (AAAA-MM-DD)" },
+        uploaded_before: { type: "string", description: "Fecha de subida hasta (AAAA-MM-DD)" },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "Máximo de resultados (por defecto 10)" },
         include_restricted: {
           type: "boolean",
           description: "Incluir pistas preview/blocked además de las reproducibles (por defecto true)",
         },
+        cursor: { type: "string", description: "next_cursor de una búsqueda anterior, para la página siguiente" },
       },
-      required: ["query"],
     },
-    run: async ({ query, limit = 10, include_restricted = true }) => {
-      const q = new URLSearchParams({ q: query, limit: String(Math.min(50, Math.max(1, limit))), linked_partitioning: "true" });
-      if (include_restricted) q.set("access", "playable,preview,blocked");
-      let body;
-      try {
-        body = await sc(`/tracks?${q}`);
-      } catch (e) {
-        if (!include_restricted) throw e;
-        q.delete("access");
-        body = await sc(`/tracks?${q}`);
+    run: async (a) => {
+      const { query, genres, tags, limit, include_restricted = true, cursor } = a;
+      if (!cursor && !query && !list(genres).length && !list(tags).length)
+        throw new Error("Indica query, genres o tags.");
+      const p = {};
+      if (query) p.q = query;
+      if (list(genres).length) p.genres = list(genres).join(",");
+      if (list(tags).length) p.tags = list(tags).join(",");
+      range(p, "bpm", a.bpm_min, a.bpm_max, (x, end) => String(end ? Math.ceil(+x) : Math.floor(+x)));
+      range(p, "duration", a.duration_min_s, a.duration_max_s, (x) => String(Math.round(+x * 1000)));
+      range(p, "created_at", a.uploaded_after, a.uploaded_before, (x, end) => day(x) + (end ? " 23:59:59" : " 00:00:00"));
+      const r = await pageAccess("/tracks", p, { limit, cursor, def: 10 }, include_restricted);
+      let tracks = r.items.map(slimTrack);
+      // El filtro de BPM de la API es aproximado (deja pasar ~10 % fuera de rango): se aplica aquí de forma estricta.
+      const cq = cursor ? new URL(String(cursor)).searchParams : null;
+      const lo = num(a.bpm_min ?? cq?.get("bpm[from]")), hi = num(a.bpm_max ?? cq?.get("bpm[to]"));
+      let out_of_range = 0;
+      if (lo != null || hi != null) {
+        const ok = (t) => t.bpm != null && (lo == null || t.bpm >= lo) && (hi == null || t.bpm <= hi);
+        out_of_range = tracks.filter((t) => !ok(t)).length;
+        tracks = tracks.filter(ok);
       }
-      return { tracks: coll(body).map(slimTrack) };
+      return { tracks, ...(out_of_range ? { out_of_range_removed: out_of_range } : {}), next_cursor: r.next_cursor };
     },
   },
   get_track: {
@@ -179,9 +318,154 @@ const TOOLS = {
       properties: { track_id: { type: "string" }, url: { type: "string" } },
     },
     run: async ({ track_id, url }) => {
-      if (url) return slimTrack(await sc(`/resolve?${new URLSearchParams({ url })}`));
-      if (!/^\d+$/.test(String(track_id || ""))) throw new Error("Indica track_id numérico o url.");
-      return slimTrack(await sc(`/tracks/${track_id}`));
+      const { id, obj } = await resolveId("track", track_id, url);
+      return slimTrack(obj || (await sc(`/tracks/${id}`)));
+    },
+  },
+  get_related_tracks: {
+    description:
+      "Pistas relacionadas con una pista: las recomendaciones de SoundCloud. Sirve para ampliar una playlist a partir de pistas semilla. exclude_playlist_id quita las que ya están en esa playlist.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        track_id: { type: "string" },
+        url: { type: "string", description: "URL de la pista en soundcloud.com, en lugar de track_id" },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "Por defecto 20" },
+        exclude_playlist_id: { type: "string", description: "Quita del resultado las pistas que ya están en esta playlist" },
+        include_restricted: { type: "boolean", description: "Por defecto true" },
+        cursor: { type: "string" },
+      },
+    },
+    run: async ({ track_id, url, limit, exclude_playlist_id, include_restricted = true, cursor }) => {
+      const seed = cursor ? null : (await resolveId("track", track_id, url)).id;
+      const r = await pageAccess(`/tracks/${seed}/related`, {}, { limit, cursor }, include_restricted);
+      let tracks = r.items.map(slimTrack).filter((t) => t.id !== seed);
+      let excluded;
+      if (exclude_playlist_id) {
+        const { tracks: pt } = await getPlaylistFull(playlistId(exclude_playlist_id));
+        const have = new Set(pt.map(rid));
+        excluded = tracks.filter((t) => have.has(t.id)).length;
+        tracks = tracks.filter((t) => !have.has(t.id));
+      }
+      return { tracks, ...(excluded !== undefined ? { excluded } : {}), next_cursor: r.next_cursor };
+    },
+  },
+  get_my_tracks: {
+    description:
+      "Pistas de tu cuenta para inspirar playlists. source: likes (tus me gusta), recently_played (las 25 últimas que has escuchado), feed (subidas y reposts de quien sigues), followings (subidas recientes de quien sigues), reposts (tus reposts).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source: { type: "string", enum: ["likes", "recently_played", "feed", "followings", "reposts"] },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "Por defecto 20" },
+        cursor: { type: "string" },
+      },
+      required: ["source"],
+    },
+    run: async ({ source, limit, cursor }) => {
+      switch (source) {
+        case "likes":
+        case "reposts": {
+          const r = await pageAccess(`/me/${source}/tracks`, {}, { limit, cursor });
+          return { tracks: r.items.map(slimTrack), next_cursor: r.next_cursor };
+        }
+        case "recently_played": {
+          const r = await pageAccess(`/me/recently-played/tracks`, {}, { limit: 25, cursor, def: 25 });
+          return { tracks: r.items.map(slimTrack) };
+        }
+        case "feed": {
+          const r = await pageAccess(`/me/feed/tracks`, {}, { limit, cursor });
+          const tracks = r.items
+            .filter((x) => x?.origin && !Array.isArray(x.origin.tracks) && x.origin.kind !== "playlist")
+            .map((x) => ({ ...slimTrack(x.origin), activity: x.type, activity_at: String(x.created_at || "").slice(0, 10) || null }));
+          return { tracks, next_cursor: r.next_cursor };
+        }
+        case "followings":
+          return followingsTracks(limit, cursor);
+        default:
+          throw new Error("source debe ser likes, recently_played, feed, followings o reposts.");
+      }
+    },
+  },
+  search_users: {
+    description: "Busca artistas, sellos o DJs. Devuelve id, nombre, ubicación, seguidores y número de pistas.",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 200 }, cursor: { type: "string" } },
+      required: ["query"],
+    },
+    run: async ({ query, limit, cursor }) => {
+      const r = await page(`/users`, { q: query }, { limit, cursor, def: 10 });
+      return { users: r.items.map(slimUser), next_cursor: r.next_cursor };
+    },
+  },
+  get_related_artists: {
+    description: "Artistas parecidos a uno dado, según SoundCloud.",
+    inputSchema: {
+      type: "object",
+      properties: { user_id: { type: "string" }, url: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 200 }, cursor: { type: "string" } },
+    },
+    run: async ({ user_id, url, limit, cursor }) => {
+      const uid = cursor ? null : (await resolveId("user", user_id, url)).id;
+      const r = await page(`/users/${uid}/related`, {}, { limit, cursor, def: 20 });
+      return { users: r.items.map(slimUser), next_cursor: r.next_cursor };
+    },
+  },
+  get_user_content: {
+    description:
+      "Contenido de un artista, sello o DJ. kind: tracks (sus subidas), likes (lo que le gusta), reposts (lo que repostea) o playlists. Útil para rebuscar en lo que escuchan DJs de referencia.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        user_id: { type: "string" },
+        url: { type: "string", description: "URL del perfil en soundcloud.com, en lugar de user_id" },
+        kind: { type: "string", enum: ["tracks", "likes", "reposts", "playlists"] },
+        sort: { type: "string", enum: ["newest", "oldest"], description: "Solo para kind=tracks. Por defecto newest" },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "Por defecto 20" },
+        cursor: { type: "string" },
+      },
+      required: ["kind"],
+    },
+    run: async ({ user_id, url, kind, sort, limit, cursor }) => {
+      const { id: uid, obj } = cursor ? { id: null, obj: null } : await resolveId("user", user_id, url);
+      const who = obj ? { user: slimUser(obj) } : {};
+      if (kind === "playlists") {
+        const r = await pageAccess(`/users/${uid}/playlists`, { show_tracks: "false" }, { limit, cursor });
+        return { ...who, playlists: r.items.map(slimPlaylist), next_cursor: r.next_cursor };
+      }
+      const path = { tracks: "tracks", likes: "likes/tracks", reposts: "reposts/tracks" }[kind];
+      if (!path) throw new Error("kind debe ser tracks, likes, reposts o playlists.");
+      const extra = kind === "tracks" ? { sort: sort === "oldest" ? "asc" : "desc" } : {};
+      const r = await pageAccess(`/users/${uid}/${path}`, extra, { limit, cursor });
+      return { ...who, tracks: r.items.map(slimTrack), next_cursor: r.next_cursor };
+    },
+  },
+  search_playlists: {
+    description: "Busca playlists públicas de cualquier usuario (sin las pistas). Luego get_playlist da sus pistas.",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 200 }, cursor: { type: "string" } },
+      required: ["query"],
+    },
+    run: async ({ query, limit, cursor }) => {
+      const r = await pageAccess(`/playlists`, { q: query, show_tracks: "false" }, { limit, cursor, def: 10 });
+      return { playlists: r.items.map(slimPlaylist), next_cursor: r.next_cursor };
+    },
+  },
+  get_station: {
+    description:
+      "Una emisora de SoundCloud (system playlist) con sus pistas. Los ids salen de get_my_playlists(kind=stations), p. ej. soundcloud:system-playlists:track-stations:123.",
+    inputSchema: { type: "object", properties: { station_id: { type: "string" } }, required: ["station_id"] },
+    run: async ({ station_id }) => {
+      const sid = String(station_id || "").trim();
+      if (!/^[a-z0-9-]+(:[A-Za-z0-9_-]+)+$/.test(sid)) throw new Error("station_id no válido.");
+      let p;
+      try {
+        p = await sc(`/system-playlists/${encodeURIComponent(sid)}?${ALL_ACCESS}`);
+      } catch {
+        p = await sc(`/system-playlists/${encodeURIComponent(sid)}`);
+      }
+      return { ...slimStation(p), tracks: (p.tracks || []).map(slimTrack) };
     },
   },
   whoami: {
@@ -201,24 +485,28 @@ const TOOLS = {
     },
   },
   get_my_playlists: {
-    description: "Lista tus playlists (sin las pistas).",
-    inputSchema: { type: "object", properties: {} },
-    run: async () => {
+    description:
+      "Tus playlists, sin las pistas. kind: own (las tuyas, por defecto), liked (las que te gustan) o stations (emisoras que te gustan; ábrelas con get_station).",
+    inputSchema: { type: "object", properties: { kind: { type: "string", enum: ["own", "liked", "stations"] } } },
+    run: async ({ kind = "own" }) => {
+      const src = { own: ["/me/playlists", slimPlaylist], liked: ["/me/likes/playlists", slimPlaylist], stations: ["/me/likes/system-playlists", slimStation] }[kind];
+      if (!src) throw new Error("kind debe ser own, liked o stations.");
       const out = [];
-      let next = `/me/playlists?limit=50&linked_partitioning=true`;
+      let next = `${src[0]}?limit=50&linked_partitioning=true${kind === "own" ? "&show_tracks=false" : ""}`;
       for (let i = 0; next && i < 20; i++) {
         const b = await sc(next);
-        out.push(...coll(b).map(slimPlaylist));
+        out.push(...coll(b).map(src[1]));
         next = b?.next_href || null;
       }
-      return { playlists: out };
+      return { [kind === "stations" ? "stations" : "playlists"]: out };
     },
   },
   get_playlist: {
-    description: "Una playlist con sus pistas.",
-    inputSchema: { type: "object", properties: { playlist_id: { type: "string" } }, required: ["playlist_id"] },
-    run: async ({ playlist_id }) => {
-      const { p, tracks, hidden } = await getPlaylistFull(playlistId(playlist_id));
+    description: "Una playlist con sus pistas, tuya o pública de otro usuario. Por id o por URL de soundcloud.com.",
+    inputSchema: { type: "object", properties: { playlist_id: { type: "string" }, url: { type: "string" } } },
+    run: async ({ playlist_id, url }) => {
+      const { id } = await resolveId("playlist", playlist_id, url);
+      const { p, tracks, hidden } = await getPlaylistFull(id);
       return {
         ...slimPlaylist(p),
         ...(hidden ? { hidden_by_api: hidden, note: "La API no devuelve todas las pistas de esta lista." } : {}),
@@ -267,7 +555,7 @@ const TOOLS = {
         const add = [...new Set(ids(track_ids))].filter((x) => !cur.includes(x));
         if (!add.length) return { added: 0, total: cur.length, note: "Nada nuevo que añadir." };
         const p = await putTracks(pid, [...cur, ...add]);
-        const after = (p?.tracks || []).map((t) => String(t.id));
+        const after = (p?.tracks || []).map(rid);
         return {
           added: add.filter((x) => after.includes(x)).length,
           not_accepted: add.filter((x) => !after.includes(x)),
@@ -318,7 +606,7 @@ const TOOLS = {
         if (pos < 0) throw new Error(`La pista ${oldId} no está en la playlist; no he cambiado nada.`);
         const next = cur.flatMap((x, i) => (i === pos ? [newId] : x === oldId || x === newId ? [] : [x]));
         const p = await putTracks(pid, next);
-        const after = (p?.tracks || []).map((t) => String(t.id));
+        const after = (p?.tracks || []).map(rid);
         return {
           replaced: after.includes(newId) && !after.includes(oldId),
           position: pos + 1,
@@ -340,7 +628,7 @@ async function removeTracks(playlist_id, track_ids) {
     const not_found = [...drop].filter((x) => !cur.includes(x));
     if (!found.length) return { removed: 0, not_found, total: cur.length, note: "Ninguna de esas pistas estaba en la playlist." };
     const p = await putTracks(pid, cur.filter((x) => !drop.has(x)));
-    const after = (p?.tracks || []).map((t) => String(t.id));
+    const after = (p?.tracks || []).map(rid);
     const still = found.filter((x) => after.includes(x));
     return {
       removed: found.length - still.length,
@@ -363,7 +651,7 @@ export async function handle(msg) {
         return reply({
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "soundcrate", version: "1.1.0" },
+          serverInfo: { name: "soundcrate", version: "1.2.0" },
         });
       case "ping":
         return reply({});
@@ -404,3 +692,4 @@ if (process.argv[1] && import.meta.url === new URL("file://" + process.argv[1]).
   });
   log("listo");
 }
+export const _camelot = camelot; // para las pruebas
