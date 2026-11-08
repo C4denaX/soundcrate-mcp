@@ -1,0 +1,27 @@
+{
+  "name": "soundcrate-mcp",
+  "version": "1.1.0",
+  "description": "SoundCloud playlists, curated with Claude. Local, zero-dependency MCP server (stdio) for the Claude desktop app.",
+  "type": "module",
+  "main": "server.mjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "login": "node login.mjs",
+    "test": "node tests/test.mjs && node tests/test2.mjs && node tests/test3.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "soundcloud",
+    "claude",
+    "playlists"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/C4denaX/soundcrate-mcp.git"
+  }
+}

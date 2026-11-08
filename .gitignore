@@ -1,0 +1,7 @@
+*.bak*
+node_modules/
+.DS_Store
+*.log
+.env
+# Notas internas de traspaso (contienen datos de la cuenta del usuario)
+HANDOFF_CLAUDE_CODE.md
