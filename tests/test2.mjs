@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 const S = await import("../server.mjs");
 let hide = true, puts = 0; const pl = { id: 99, title: "x", sharing: "private", track_count: 3, tracks: [{ id: 1 }, { id: 2 }, { id: 3 }] };
 S._setDeps({
-  kcGet: () => "rt", kcSet: () => {}, credentials: () => ({ clientId: "c", clientSecret: "s" }),
+  secretGet: () => "rt", secretSet: () => {}, credentials: () => ({ clientId: "c", clientSecret: "s" }),
   tokenRequest: async () => ({ access_token: "at1", refresh_token: "rt1", expires_in: 3600 }),
   fetch: async (url, o) => {
     const u = new URL(url);

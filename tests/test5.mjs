@@ -65,8 +65,8 @@ const J = (x) => Response.json(x);
 const nf = (p) => new Response("nf " + p, { status: 404 });
 
 S._setDeps({
-  kcGet: () => "rt",
-  kcSet: () => {},
+  secretGet: () => "rt",
+  secretSet: () => {},
   credentials: () => ({ clientId: "c", clientSecret: "s" }),
   tokenRequest: async () => ({ access_token: "at", refresh_token: "rt2", expires_in: 3600 }),
   fetch: async (url, o) => {
@@ -298,7 +298,7 @@ assert.equal(PL[99].list.join(), "9", "la playlist excluida no se ha tocado");
 
 // Versión y lista de herramientas.
 const init = await S.handle({ jsonrpc: "2.0", id: 9, method: "initialize", params: {} });
-assert.equal(init.result.serverInfo.version, "1.5.0");
+assert.equal(init.result.serverInfo.version, "1.6.0");
 const names = (await S.handle({ jsonrpc: "2.0", id: 10, method: "tools/list" })).result.tools.map((t) => t.name);
 for (const n of ["suggest_tracks", "find_official_version", "analyze_playlist", "update_playlist"]) assert.ok(names.includes(n), n);
 console.log("OK");

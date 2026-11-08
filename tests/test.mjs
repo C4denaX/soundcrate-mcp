@@ -4,7 +4,7 @@ const kc = { refresh_token: "rt0" }; let refreshCalls = 0;
 const pl = { id: 99, title: "REMEMBER – faltan", sharing: "private", track_count: 2, tracks: [{ id: 1 }, { id: 2 }] };
 let first401 = true; const calls = [];
 S._setDeps({
-  kcGet: (a) => kc[a] ?? null, kcSet: (a, v) => (kc[a] = v),
+  secretGet: (a) => kc[a] ?? null, secretSet: (a, v) => (kc[a] = v),
   credentials: () => ({ clientId: "cid", clientSecret: "sec" }),
   tokenRequest: async (p) => { refreshCalls++; assert.equal(p.refresh_token, kc.refresh_token); return { access_token: "at" + refreshCalls, refresh_token: "rt" + refreshCalls, expires_in: 3600 }; },
   fetch: async (url, o) => {

@@ -13,7 +13,7 @@ const SEARCH = [
 const calls = [];
 S._setDeps({
   goPlus: false,
-  kcGet: () => "rt", kcSet: () => {}, credentials: () => ({ clientId: "c", clientSecret: "s" }),
+  secretGet: () => "rt", secretSet: () => {}, credentials: () => ({ clientId: "c", clientSecret: "s" }),
   tokenRequest: async () => ({ access_token: "at", refresh_token: "rt2", expires_in: 3600 }),
   fetch: async (url) => {
     const u = new URL(url);
@@ -45,7 +45,7 @@ assert.equal(r.not_listenable_removed, 5);
 let init = (await S.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })).result;
 assert.match(init.instructions, /has not declared Go\+/);
 assert.match(init.instructions, /go_plus_probable/);
-assert.equal(init.serverInfo.version, "1.5.0");
+assert.equal(init.serverInfo.version, "1.6.0");
 r = await call("whoami", {});
 assert.equal(r.go_plus_declared, false); assert.match(r.note, /SC_GO_PLUS/);
 

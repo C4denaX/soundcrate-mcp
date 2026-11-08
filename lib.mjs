@@ -1,49 +1,32 @@
-// SoundCloud MCP local — utilidades comunes (sin dependencias externas).
-// Credenciales y tokens se guardan en el Llavero de macOS (servicio "soundcloud-mcp").
+// SoundCrate — utilidades comunes (sin dependencias externas).
+// Las credenciales y la sesión van al almacén de secretos del sistema (ver secrets.mjs).
 
-import { execFileSync } from "node:child_process";
+import { createStore, SetupError } from "./secrets.mjs";
 
-export const SERVICE = "soundcloud-mcp";
+export { SetupError };
 export const AUTH_URL = "https://secure.soundcloud.com/authorize";
 export const TOKEN_URL = "https://secure.soundcloud.com/oauth/token";
 export const API = "https://api.soundcloud.com";
 export const REDIRECT_URI = process.env.SC_REDIRECT_URI || "http://127.0.0.1:8976/callback";
+export const APPS_URL = "https://soundcloud.com/you/apps";
 
-// De momento las credenciales solo se guardan en el Llavero de macOS.
-function assertMac() {
-  if (process.platform !== "darwin") {
-    throw new Error(
-      "SoundCrate stores its credentials in the macOS Keychain; other operating systems are not supported yet."
-    );
-  }
+let _store = null;
+// El almacén se crea al usarlo: así un SC_SECRET_STORE inválido no impide arrancar el servidor
+// (el error llega a la herramienta y el agente puede explicarlo).
+export function store() {
+  return (_store ??= createStore());
 }
 
-export function kcGet(account) {
-  assertMac();
-  try {
-    return execFileSync("security", ["find-generic-password", "-s", SERVICE, "-a", account, "-w"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
+export const secretGet = (account) => store().get(account);
+export const secretSet = (account, value) => store().set(account, value);
 
-export function kcSet(account, value) {
-  assertMac();
-  execFileSync("security", ["add-generic-password", "-U", "-s", SERVICE, "-a", account, "-w", value], {
-    stdio: "ignore",
-  });
-}
-
+// SC_CLIENT_ID / SC_CLIENT_SECRET tienen prioridad (contenedores, CI). El refresh token no: rota en cada uso
+// y hay que poder guardarlo, así que siempre va al almacén.
 export function credentials() {
-  const clientId = kcGet("client_id");
-  const clientSecret = kcGet("client_secret");
+  const clientId = process.env.SC_CLIENT_ID || secretGet("client_id");
+  const clientSecret = process.env.SC_CLIENT_SECRET || secretGet("client_secret");
   if (!clientId || !clientSecret) {
-    throw new Error(
-      "Missing client_id/client_secret in the macOS Keychain (service 'soundcloud-mcp'). See step 2 of the README."
-    );
+    throw new SetupError("SoundCrate is not set up yet: the SoundCloud app credentials (Client ID and Client Secret) are missing.");
   }
   return { clientId, clientSecret };
 }

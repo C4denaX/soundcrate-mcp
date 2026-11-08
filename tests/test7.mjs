@@ -72,7 +72,7 @@ function start(entry, env = {}) {
 
   r = await c.request("tools/list");
   const tools = r.result.tools;
-  assert.equal(tools.length, 21);
+  assert.equal(tools.length, 23);
   // Esquemas aceptables para los proveedores más estrictos (OpenAI, Gemini).
   const TYPES = new Set(["string", "number", "integer", "boolean", "array", "object"]);
   for (const t of tools) {
@@ -151,7 +151,7 @@ function start(entry, env = {}) {
 
   r = await c.request("tools/list", meta());
   assert.equal(r.result.resultType, "complete");
-  assert.equal(r.result.tools.length, 21);
+  assert.equal(r.result.tools.length, 23);
   assert.ok(r.result.ttlMs > 0); assert.equal(r.result.cacheScope, "private");
   assert.equal(r.result._meta["io.modelcontextprotocol/serverInfo"].version, PKG_VERSION);
 
@@ -170,11 +170,20 @@ function start(entry, env = {}) {
   const dir = mkdtempSync(join(tmpdir(), "soundcrate-bin-"));
   try {
     const link = join(dir, "soundcrate-mcp");
-    symlinkSync(SERVER, link);
-    const c = start(link);
-    const r = await c.request("initialize", { protocolVersion: "2025-11-25", capabilities: {} });
-    assert.equal(r.result.serverInfo.name, "soundcrate", "arranca aunque argv[1] sea un enlace");
-    await c.close();
+    let linked = true;
+    try {
+      symlinkSync(SERVER, link);
+    } catch (e) {
+      // En Windows crear enlaces exige permisos de administrador o el modo de desarrollador.
+      if (process.platform === "win32" && e.code === "EPERM") linked = false;
+      else throw e;
+    }
+    if (linked) {
+      const c = start(link);
+      const r = await c.request("initialize", { protocolVersion: "2025-11-25", capabilities: {} });
+      assert.equal(r.result.serverInfo.name, "soundcrate", "arranca aunque argv[1] sea un enlace");
+      await c.close();
+    } else console.log("enlace: omitido (Windows sin permiso para crear enlaces)");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

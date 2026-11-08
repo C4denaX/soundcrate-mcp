@@ -6,7 +6,7 @@ const T = (id, extra = {}) => ({ id, title: "t" + id, user: { username: "u" }, a
 const calls = [];
 let rejectAccess = false;
 S._setDeps({
-  kcGet: () => "rt", kcSet: () => {}, credentials: () => ({ clientId: "c", clientSecret: "s" }),
+  secretGet: () => "rt", secretSet: () => {}, credentials: () => ({ clientId: "c", clientSecret: "s" }),
   tokenRequest: async () => ({ access_token: "at", refresh_token: "rt2", expires_in: 3600 }),
   fetch: async (url, o) => {
     const u = new URL(url);

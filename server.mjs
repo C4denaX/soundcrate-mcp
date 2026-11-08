@@ -9,13 +9,18 @@ import readline from "node:readline";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import * as lib from "./lib.mjs";
+import { startSetup } from "./setup.mjs";
 
+const SetupError = lib.SetupError;
 const deps = {
   fetch: (...a) => fetch(...a),
-  kcGet: lib.kcGet,
-  kcSet: lib.kcSet,
+  // Almacén de secretos del sistema (Llavero, Secret Service, Administrador de credenciales o fichero): secrets.mjs
+  secretGet: lib.secretGet,
+  secretSet: lib.secretSet,
+  store: lib.store,
   credentials: lib.credentials,
   tokenRequest: lib.tokenRequest,
+  startSetup,
   // La API no informa de Go+ (/me solo lista planes de artista): el usuario lo declara con SC_GO_PLUS=1.
   goPlus: /^(1|true|yes|si|sí)$/i.test(process.env.SC_GO_PLUS || ""),
 };
@@ -28,21 +33,37 @@ const log = (...a) => process.stderr.write("[soundcrate] " + a.join(" ") + "\n")
 // ---------- Tokens ----------
 let access = null; // { token, exp }
 let refreshing = null;
+let creds = null; // client_id/secret en memoria: en Windows cada lectura del almacén tarda 1-3 s
+
+// Tras configurar o volver a conectar desde start_setup, olvidar lo que hubiera en memoria.
+function resetSession(tok) {
+  creds = null;
+  access = tok?.access_token ? { token: tok.access_token, exp: Date.now() + ((tok.expires_in || 3600) - 120) * 1000 } : null;
+}
 
 async function refresh() {
   if (refreshing) return refreshing;
   refreshing = (async () => {
-    const rt = deps.kcGet("refresh_token");
-    if (!rt) throw new Error("No saved session. Run: node login.mjs (or soundcrate-login)");
-    const { clientId, clientSecret } = deps.credentials();
-    const tok = await deps.tokenRequest({
-      grant_type: "refresh_token",
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: rt,
-    });
+    const rt = deps.secretGet("refresh_token");
+    if (!rt) throw new SetupError("SoundCrate is not connected to a SoundCloud account yet.");
+    const { clientId, clientSecret } = (creds ??= deps.credentials());
+    let tok;
+    try {
+      tok = await deps.tokenRequest({
+        grant_type: "refresh_token",
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: rt,
+      });
+    } catch (e) {
+      if (/oauth\/token (400|401)/.test(e.message)) {
+        creds = null;
+        throw new SetupError("The saved SoundCloud session or app credentials are no longer valid; the user needs to connect again.");
+      }
+      throw e;
+    }
     // Los refresh tokens son de un solo uso: guardar siempre el nuevo.
-    if (tok.refresh_token) deps.kcSet("refresh_token", tok.refresh_token);
+    if (tok.refresh_token) deps.secretSet("refresh_token", tok.refresh_token);
     access = { token: tok.access_token, exp: Date.now() + ((tok.expires_in || 3600) - 120) * 1000 };
     return access.token;
   })().finally(() => (refreshing = null));
@@ -389,8 +410,147 @@ function analyzeTracks(raw, hidden = 0) {
   };
 }
 
+
+// ---------- Configuración guiada ----------
+// Dónde se añade SC_GO_PLUS=1 en los clientes más comunes (el agente se lo explica al usuario).
+const CLIENT_CONFIG = {
+  "Claude Desktop": 'claude_desktop_config.json → mcpServers.<name>.env: { "SC_GO_PLUS": "1" }',
+  "Claude Code": "claude mcp add … -e SC_GO_PLUS=1, or .mcp.json → env",
+  OpenCode: 'opencode.json(c) → mcp.<name>.environment: { "SC_GO_PLUS": "1" }',
+  Cursor: '~/.cursor/mcp.json → mcpServers.<name>.env: { "SC_GO_PLUS": "1" }',
+  "VS Code": 'mcp.json → servers.<name>.env: { "SC_GO_PLUS": "1" }',
+  "Codex CLI": '~/.codex/config.toml → [mcp_servers.<name>] env = { SC_GO_PLUS = "1" }',
+  "Gemini CLI": '~/.gemini/settings.json → mcpServers.<name>.env: { "SC_GO_PLUS": "1" }',
+};
+
+async function buildStatus(verify) {
+  const steps = [];
+  const add = (id, title, status, extra = {}) => steps.push({ step: steps.length + 1, id, title, status, ...extra });
+
+  // 1. Almacén de secretos
+  let st = null, probe;
+  try {
+    st = deps.store();
+    probe = st.probe();
+  } catch (e) {
+    probe = { ok: false, problem: e.message, fix: e.fix };
+  }
+  add("secure_storage", "Secure storage for the credentials", probe.ok ? "done" : "todo", {
+    detail: st ? st.label : null,
+    ...(probe.problem ? { problem: probe.problem } : {}),
+    ...(probe.warning ? { warning: probe.warning } : {}),
+    ...(probe.ok ? {} : { how: [].concat(probe.fix || []).concat(["Then restart the MCP client and call setup_status again."]) }),
+  });
+
+  // 2. App de SoundCloud (Client ID / Secret)
+  let hasCreds = false, credsProblem = null;
+  if (probe.ok || process.env.SC_CLIENT_ID) {
+    try {
+      deps.credentials();
+      hasCreds = true;
+    } catch (e) {
+      if (!e.setup) credsProblem = e.message;
+    }
+  }
+  add("soundcloud_app", "Register a SoundCloud app and save its Client ID and Client Secret", hasCreds ? "done" : "todo", {
+    ...(credsProblem ? { problem: credsProblem } : {}),
+    ...(hasCreds
+      ? {}
+      : {
+          how: [
+            "Call start_setup: it opens a local page that walks the user through it.",
+            `On that page the user opens ${lib.APPS_URL} (needs a SoundCloud Artist Pro plan), creates an app with Redirect URI ${lib.REDIRECT_URI}, and types the Client ID and Client Secret.`,
+          ],
+        }),
+  });
+
+  // 3. Sesión
+  let hasSession = false;
+  if (probe.ok) {
+    try {
+      hasSession = !!deps.secretGet("refresh_token");
+    } catch {}
+  }
+  add("connect_account", "Connect the SoundCloud account", hasSession ? "done" : "todo", hasSession ? {} : { how: ["Call start_setup and ask the user to click 'Connect with SoundCloud' and authorize the app."] });
+
+  // 4. Comprobación real
+  let user = null;
+  if (verify && hasCreds && hasSession) {
+    try {
+      const me = await sc("/me");
+      user = me.username;
+      add("check_session", "Check the session with SoundCloud", "done", { detail: `Connected as ${user}` });
+    } catch (e) {
+      add("check_session", "Check the session with SoundCloud", "error", {
+        problem: e.message,
+        how: e.setup ? ["Call start_setup and connect the account again."] : ["Try again later; if it keeps failing, call start_setup to reconnect."],
+      });
+    }
+  }
+
+  // 5. Go+ (opcional)
+  add("go_plus", "Tell SoundCrate whether the user has SoundCloud Go+ (optional)", deps.goPlus ? "done" : "optional", {
+    detail: deps.goPlus ? "Go+ declared (SC_GO_PLUS=1)." : "Go+ not declared.",
+    ...(deps.goPlus
+      ? {}
+      : {
+          how: [
+            "Ask the user if they have SoundCloud Go+. If yes, add the environment variable SC_GO_PLUS=1 to this MCP server in their client configuration and restart the client.",
+            CLIENT_CONFIG,
+          ],
+        }),
+  });
+
+  const required = steps.filter((x) => x.id !== "go_plus");
+  const ready = required.every((x) => x.status === "done") && (!verify || !!user);
+  const next = steps.find((x) => x.status === "todo" || x.status === "error") || null;
+  return {
+    ready,
+    ...(user ? { connected_as: user } : {}),
+    platform: process.platform,
+    node: process.version,
+    steps,
+    next_step: next,
+    guidance_for_agent: ready
+      ? "SoundCrate is ready. If Go+ is not declared, you may ask the user whether they have it."
+      : "Explain the next step to the user in plain, friendly language (in their language), one step at a time, and offer to run start_setup yourself. Never ask for the Client Secret in the chat. After each step, call setup_status again.",
+  };
+}
+
 // ---------- Herramientas ----------
 const TOOLS = {
+  setup_status: {
+    description:
+      "Check whether SoundCrate is ready on this computer and, if not, get the exact next steps. Call it when the user is new to SoundCrate, asks how to set it up, or when any tool fails with a setup error. " +
+      "Then guide the user one step at a time, in plain language and in their language, and offer to run start_setup for them. Never ask the user to paste the Client Secret into the chat: start_setup opens a local page where they type it.",
+    inputSchema: {
+      type: "object",
+      properties: { verify_session: { type: "boolean", description: "Also check the saved session against SoundCloud (default true)" } },
+    },
+    run: async ({ verify_session = true }) => buildStatus(verify_session),
+  },
+  start_setup: {
+    description:
+      "Open SoundCrate's local setup page in the user's browser (served only on 127.0.0.1). There the user follows the steps to register a SoundCloud app, types its Client ID and Client Secret, and connects their account; the secrets go straight to the system's secure storage and never pass through the chat. " +
+      "Returns the URL in case the browser does not open. When the user says they are done, call setup_status to confirm.",
+    inputSchema: {
+      type: "object",
+      properties: { open_browser: { type: "boolean", description: "Default true. Set false to only get the URL (e.g. when the browser is on another machine)." } },
+    },
+    run: async ({ open_browser = true }) => {
+      const s = await deps.startSetup({ open: open_browser !== false, onSuccess: (r) => resetSession(r) });
+      return {
+        url: s.url,
+        browser_opened: !!s.opened,
+        already_running: !!s.already_running,
+        secure_storage: s.store,
+        tell_user: s.opened
+          ? "A setup page has opened in your browser. Follow the three steps there; when SoundCloud sends you back and the page says it is connected, tell me."
+          : `Open this page in your browser on this computer and follow the three steps: ${s.url}`,
+        next: "When the user says they finished, call setup_status to confirm everything is ready.",
+      };
+    },
+  },
   search_tracks: {
     description:
       "Search tracks by text and/or filters (genres, tags, BPM, duration, upload date). Returns id, title, user, BPM, key, Camelot, genre, label, release date, plays, likes, access and listen. " +
@@ -1009,7 +1169,7 @@ async function removeTracks(playlist_id, track_ids) {
 // Servidor de doble versión, como prevé la especificación 2026-07-28:
 // - Clientes "legacy" (2025-11-25 y anteriores): handshake initialize / notifications/initialized.
 // - Clientes "modernos" (2026-07-28): sin handshake; cada petición lleva la versión en _meta y existe server/discover.
-export const VERSION = "1.5.0";
+export const VERSION = "1.6.0";
 const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const MODERN_VERSIONS = ["2026-07-28"];
 const META_VERSION = "io.modelcontextprotocol/protocolVersion";
@@ -1017,13 +1177,18 @@ const META_SERVER = "io.modelcontextprotocol/serverInfo";
 const SERVER_INFO = { name: "soundcrate", title: "SoundCrate", version: VERSION };
 const CAPABILITIES = { tools: { listChanged: false } };
 const CACHE = { ttlMs: 300000, cacheScope: "private" }; // las descripciones dependen de SC_GO_PLUS
-const instructions = () => `${LISTEN_NOTE} ${listenStatus()}`;
+const SETUP_NOTE =
+  "If the user is new to SoundCrate or a tool says it is not set up, call setup_status and guide them step by step; " +
+  "start_setup opens a local page where they enter their credentials, so never ask for secrets in the chat.";
+const instructions = () => `${SETUP_NOTE} ${LISTEN_NOTE} ${listenStatus()}`;
 
 // Títulos y anotaciones: los clientes los usan para pedir confirmación antes de las escrituras.
 const READ = { readOnlyHint: true, openWorldHint: true };
 const ADD = { readOnlyHint: false, destructiveHint: false, openWorldHint: true };
 const CHANGE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
 const TOOL_META = {
+  setup_status: ["Check SoundCrate setup", READ],
+  start_setup: ["Open SoundCrate setup page", { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }],
   search_tracks: ["Search tracks", READ],
   get_track: ["Get track", READ],
   get_related_tracks: ["Related tracks", READ],
@@ -1061,6 +1226,14 @@ export function listTools() {
       annotations: { title, ...annotations },
     };
   });
+}
+
+// Un error de configuración lleva al agente a setup_status, que le da los pasos para guiar al usuario.
+function errorText(e) {
+  const msg = String(e?.message || e);
+  if (!e?.setup) return msg;
+  const fix = e.fix ? ` How to fix it: ${[].concat(e.fix).join("; ")}.` : "";
+  return `${msg}${fix} Call the setup_status tool to get step-by-step instructions, and guide the user through them.`;
 }
 
 export async function handle(msg) {
@@ -1126,7 +1299,7 @@ export async function handle(msg) {
           const out = await t.run(args);
           return reply({ content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
         } catch (e) {
-          return reply({ isError: true, content: [{ type: "text", text: String(e.message || e) }] });
+          return reply({ isError: true, content: [{ type: "text", text: errorText(e) }] });
         }
       }
       // Sin recursos ni prompts, pero algunos clientes los piden igualmente: listas vacías en vez de error.
