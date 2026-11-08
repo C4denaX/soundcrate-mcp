@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Inicio de sesión único (OAuth 2.1 + PKCE). Guarda el refresh token en el Llavero.
-// Uso: node login.mjs
+// Uso: node login.mjs  (o soundcrate-login si se instaló con npm)
 
 import http from "node:http";
 import crypto from "node:crypto";
@@ -31,7 +31,7 @@ let done = false;
 async function finish(code, gotState) {
   if (done) return;
   if (gotState !== state) {
-    console.error("El parámetro state no coincide. Vuelve a ejecutar node login.mjs.");
+    console.error("The state parameter does not match. Run the login again.");
     process.exit(1);
   }
   done = true;
@@ -43,9 +43,9 @@ async function finish(code, gotState) {
     code_verifier: verifier,
     code,
   });
-  if (!tok.refresh_token) throw new Error("SoundCloud no devolvió refresh_token.");
+  if (!tok.refresh_token) throw new Error("SoundCloud did not return a refresh_token.");
   kcSet("refresh_token", tok.refresh_token);
-  console.log("\n✅ Sesión guardada en el Llavero. Ya puedes reiniciar la app de Claude.");
+  console.log("\n✅ Session saved in the macOS Keychain. Restart your MCP client (Claude, OpenCode, Cursor…) to use it.");
   process.exit(0);
 }
 
@@ -61,11 +61,11 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(
     err
-      ? `<p>SoundCloud devolvió un error: ${String(err).replace(/[<>&]/g, "")}</p>`
-      : "<p>Listo. Puedes cerrar esta pestaña y volver a la Terminal.</p>"
+      ? `<p>SoundCloud returned an error: ${String(err).replace(/[<>&]/g, "")}</p>`
+      : "<p>Done. You can close this tab and go back to the terminal.</p>"
   );
   if (err) {
-    console.error("Error de autorización:", err);
+    console.error("Authorization error:", err);
     process.exit(1);
   }
   try {
@@ -77,12 +77,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(Number(cb.port || 80), cb.hostname, () => {
-  console.log("Abriendo SoundCloud en el navegador para autorizar la app…");
-  console.log("Si no se abre, copia esta dirección en el navegador:\n\n" + url + "\n");
-  execFile("open", [url], () => {});
+  console.log("Opening SoundCloud in your browser to authorize the app…");
+  console.log("If it does not open, paste this URL into your browser:\n\n" + url + "\n");
+  const [cmd, ...args] =
+    process.platform === "darwin" ? ["open"] : process.platform === "win32" ? ["cmd", "/c", "start", '""'] : ["xdg-open"];
+  execFile(cmd, [...args, url], () => {});
   console.log(
-    "Si tras autorizar el navegador no carga la página de vuelta, pega aquí la dirección completa\n" +
-      "a la que te ha llevado (empieza por " + REDIRECT_URI + "?code=…) y pulsa Intro:"
+    "If the browser does not load the page after you authorize, paste the full URL it took you to\n" +
+      "(it starts with " + REDIRECT_URI + "?code=…) and press Enter:"
   );
 });
 
@@ -91,6 +93,6 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
     const u = new URL(line.trim());
     await finish(u.searchParams.get("code"), u.searchParams.get("state"));
   } catch (e) {
-    console.error("No he podido leer esa dirección:", e.message);
+    console.error("Could not read that URL:", e.message);
   }
 });

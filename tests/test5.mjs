@@ -170,10 +170,10 @@ const ids = (xs) => xs.map((x) => x.id);
   assert.deepEqual(ids(r.out.candidates), ["60", "62"], "remix y títulos distintos fuera");
   const [best, second] = r.out.candidates;
   assert.equal(best.likely_official, true, "mismo ISRC");
-  assert.ok(best.reasons.includes("mismo ISRC"));
-  assert.ok(best.reasons.some((x) => x.startsWith("sello:")));
+  assert.ok(best.reasons.includes("same ISRC"));
+  assert.ok(best.reasons.some((x) => x.startsWith("label:")));
   assert.equal(second.likely_official, false);
-  assert.equal(second.reasons.includes("mismo artista"), true);
+  assert.equal(second.reasons.includes("same artist"), true);
   assert.equal(r.out.original.id, "50");
   console.log("oficial:", best.id, best.reasons.join(", "), "| 2º:", second.id, second.score);
   assert.equal((await call("find_official_version", { track_id: "abc" })).err, true);
@@ -241,15 +241,15 @@ const ids = (xs) => xs.map((x) => x.id);
   // Validaciones: ninguna escribe.
   reset();
   const cases = [
-    [{ playlist_id: "10", track_order: ["1", "2", "3", "4"] }, /exactamente las 5/],
-    [{ playlist_id: "10", track_order: ["1", "1", "2", "3", "4"] }, /exactamente las 5/],
-    [{ playlist_id: "10", track_order: ["1", "2", "3", "4", "99"] }, /exactamente las 5/],
-    [{ playlist_id: "10", sort_by: "bpm", track_order: ["1", "2", "3", "4", "5"] }, /no los dos/],
-    [{ playlist_id: "10" }, /nada que cambiar/],
-    [{ playlist_id: "10", title: "   " }, /vacío/],
-    [{ playlist_id: "10", sort_by: "popularidad" }, /sort_by debe ser/],
-    [{ playlist_id: "11", title: "x" }, /oculta 2 de las 5/],
-    [{ playlist_id: "11", sort_by: "bpm" }, /oculta 2 de las 5/],
+    [{ playlist_id: "10", track_order: ["1", "2", "3", "4"] }, /exactly the 5/],
+    [{ playlist_id: "10", track_order: ["1", "1", "2", "3", "4"] }, /exactly the 5/],
+    [{ playlist_id: "10", track_order: ["1", "2", "3", "4", "99"] }, /exactly the 5/],
+    [{ playlist_id: "10", sort_by: "bpm", track_order: ["1", "2", "3", "4", "5"] }, /not both/],
+    [{ playlist_id: "10" }, /Nothing to change/],
+    [{ playlist_id: "10", title: "   " }, /cannot be empty/],
+    [{ playlist_id: "10", sort_by: "popularidad" }, /sort_by must be/],
+    [{ playlist_id: "11", title: "x" }, /hides 2 of the 5/],
+    [{ playlist_id: "11", sort_by: "bpm" }, /hides 2 of the 5/],
   ];
   for (const [args, re] of cases) {
     r = await call("update_playlist", args);
@@ -263,7 +263,7 @@ const ids = (xs) => xs.map((x) => x.id);
   reset();
   dropOnPut = 1;
   r = await call("update_playlist", { playlist_id: "10", sort_by: "bpm", direction: "desc" });
-  assert.equal(r.err, true); assert.match(r.out, /restaurado/);
+  assert.equal(r.err, true); assert.match(r.out, /restored/);
   assert.equal(puts.length, 2, "escritura + restauración");
   assert.deepEqual(puts[1].body.tracks.map((t) => t.id), ["1", "2", "3", "4", "5"]);
   assert.deepEqual(PL[10].list, ["1", "2", "3", "4", "5"]);
@@ -298,7 +298,7 @@ assert.equal(PL[99].list.join(), "9", "la playlist excluida no se ha tocado");
 
 // Versión y lista de herramientas.
 const init = await S.handle({ jsonrpc: "2.0", id: 9, method: "initialize", params: {} });
-assert.equal(init.result.serverInfo.version, "1.4.0");
+assert.equal(init.result.serverInfo.version, "1.5.0");
 const names = (await S.handle({ jsonrpc: "2.0", id: 10, method: "tools/list" })).result.tools.map((t) => t.name);
 for (const n of ["suggest_tracks", "find_official_version", "analyze_playlist", "update_playlist"]) assert.ok(names.includes(n), n);
 console.log("OK");

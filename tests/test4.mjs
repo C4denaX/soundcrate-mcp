@@ -64,7 +64,7 @@ console.log("búsqueda:", JSON.stringify(t1));
 r = await call("search_tracks", { cursor: r.out.next_cursor });
 assert.equal(last().href, `${API}/tracks?cursor=abc`, "el cursor se usa tal cual");
 assert.equal((await call("search_tracks", {})).err, true, "sin criterios da error");
-assert.match((await call("search_tracks", { query: "x", uploaded_after: "ayer" })).out, /AAAA-MM-DD/);
+assert.match((await call("search_tracks", { query: "x", uploaded_after: "ayer" })).out, /YYYY-MM-DD/);
 
 // 1b. Camelot y filtro estricto también en la página siguiente.
 const cam = (k) => S._camelot(k);
@@ -76,7 +76,7 @@ assert.equal(r.out.tracks.length, 0, "el cursor conserva el rango de BPM");
 const n = calls.length;
 for (const evil of ["https://evil.example/steal", "http://api.soundcloud.com/tracks", "https://api.soundcloud.com.evil.example/x"]) {
   r = await call("search_tracks", { cursor: evil });
-  assert.equal(r.err, true); assert.match(r.out, /no permitida/);
+  assert.equal(r.err, true); assert.match(r.out, /not allowed/);
 }
 assert.equal(calls.length, n, "ninguna petición salió");
 
@@ -131,4 +131,9 @@ assert.equal(r.out.tracks[0].id, "41"); assert.equal(r.out.id, sid);
 assert.equal((await call("get_station", { station_id: "../../me" })).err, true, "station_id con barras rechazado");
 r = await call("get_my_playlists", { kind: "liked" });
 assert.equal(r.out.playlists[0].title, "liked pl");
+// Filtro por título: sin distinguir mayúsculas ni acentos (norm quita lo que va entre paréntesis).
+r = await call("get_my_playlists", { kind: "liked", query: "LIKED" });
+assert.deepEqual(r.out.playlists.map((p) => p.title), ["liked pl"]); assert.equal(r.out.total_before_filter, 1);
+r = await call("get_my_playlists", { kind: "liked", query: "nada" });
+assert.deepEqual(r.out.playlists, []);
 console.log("OK");

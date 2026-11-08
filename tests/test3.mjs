@@ -52,7 +52,7 @@ const [bad] = await Promise.all([
   call("get_playlist", { playlist_id: "20" }),
   call("add_tracks_to_playlist", { playlist_id: "10", track_ids: ["6"] }),
 ]);
-assert.equal(bad.err, true); assert.match(bad.out, /no está en la playlist/);
+assert.equal(bad.err, true); assert.match(bad.out, /is not in the playlist/);
 assert.deepEqual(lists[10].tracks, [2, 3, 4, 5, 6], "tras un error la cola sigue");
 assert.equal(maxInFlight, 2, "playlists distintas en paralelo");
 
@@ -86,7 +86,7 @@ assert.equal(r.err, true); assert.match(r.out, /playlist_id/);
 r = await call("whoami", { force_refresh: true });
 assert.deepEqual(r.out, { id: "7", username: "dj", plan: "Pro Plus", subscriptions: [{ id: "creator-pro-unlimited", name: "Artist Pro" }], token_refreshed: true, go_plus_declared: false, note: r.out.note });
 const init = await S.handle({ jsonrpc: "2.0", id: 2, method: "initialize", params: {} });
-assert.equal(init.result.serverInfo.version, "1.4.0");
+assert.equal(init.result.serverInfo.version, "1.5.0");
 const list = (await S.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })).result.tools;
 assert.doesNotMatch(list.find((t) => t.name === "search_tracks").description, /blocked = no reproducible/);
 console.log("OK");

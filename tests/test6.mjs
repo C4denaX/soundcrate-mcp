@@ -43,9 +43,9 @@ r = await call("search_tracks", { query: "x", only_listenable: true });
 assert.deepEqual(listen(r.tracks), [["1", "full"]]);
 assert.equal(r.not_listenable_removed, 5);
 let init = (await S.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })).result;
-assert.match(init.instructions, /no ha declarado Go\+/);
+assert.match(init.instructions, /has not declared Go\+/);
 assert.match(init.instructions, /go_plus_probable/);
-assert.equal(init.serverInfo.version, "1.4.0");
+assert.equal(init.serverInfo.version, "1.5.0");
 r = await call("whoami", {});
 assert.equal(r.go_plus_declared, false); assert.match(r.note, /SC_GO_PLUS/);
 
@@ -55,7 +55,7 @@ r = await call("search_tracks", { query: "x", only_listenable: true });
 assert.deepEqual(r.tracks.map((t) => t.id), ["1", "2", "3", "4", "5"]);
 assert.equal(r.not_listenable_removed, 1);
 init = (await S.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })).result;
-assert.match(init.instructions, /ha declarado Go\+/);
+assert.match(init.instructions, /has declared Go\+/);
 assert.equal((await call("whoami", {})).go_plus_declared, true);
 
 // 4. suggest_tracks aplica el mismo filtro.
