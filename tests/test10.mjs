@@ -7,7 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const read = (f) => fs.readFileSync(path.join(ROOT, f), "utf8");
+// En Windows, git puede convertir los saltos de línea a CRLF al descargar el repo.
+const read = (f) => fs.readFileSync(path.join(ROOT, f), "utf8").replace(/\r\n/g, "\n");
 const json = (f) => JSON.parse(read(f));
 const pkg = json("package.json");
 const manifest = json("manifest.json");
