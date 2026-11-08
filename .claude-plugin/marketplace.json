@@ -1,0 +1,17 @@
+{
+  "name": "soundcrate",
+  "description": "SoundCrate: SoundCloud playlists curated by your AI assistant.",
+  "owner": {
+    "name": "Sergio Ruiz",
+    "url": "https://github.com/C4denaX"
+  },
+  "plugins": [
+    {
+      "name": "soundcrate",
+      "source": "./",
+      "description": "Dig, curate and reorder your SoundCloud playlists from Claude, with guided setup.",
+      "category": "music",
+      "tags": ["soundcloud", "playlists", "dj"]
+    }
+  ]
+}

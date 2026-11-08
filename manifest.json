@@ -1,0 +1,159 @@
+{
+  "manifest_version": "0.3",
+  "name": "soundcrate",
+  "display_name": "SoundCrate",
+  "version": "1.7.0",
+  "description": "Dig, curate and reorder your SoundCloud playlists by talking to Claude.",
+  "long_description": "SoundCrate connects Claude to your own SoundCloud account. Search tracks by genre, BPM, key or upload date; get related tracks and artists; create private playlists; and analyze or reorder them by BPM or harmonic key (Camelot). Everything runs on your computer: your credentials stay in the system secret store and setup happens on a local page, never in the chat. After installing, ask Claude: \"Help me set up SoundCrate\". Requires a SoundCloud app, which needs a SoundCloud Artist Pro plan. Not affiliated with SoundCloud.",
+  "author": {
+    "name": "Sergio Ruiz",
+    "url": "https://github.com/C4denaX"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/C4denaX/soundcrate-mcp.git"
+  },
+  "homepage": "https://github.com/C4denaX/soundcrate-mcp",
+  "documentation": "https://github.com/C4denaX/soundcrate-mcp#readme",
+  "support": "https://github.com/C4denaX/soundcrate-mcp/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server.mjs"
+      ],
+      "env": {
+        "SC_GO_PLUS": "${user_config.go_plus}"
+      }
+    }
+  },
+  "user_config": {
+    "go_plus": {
+      "type": "boolean",
+      "title": "I have SoundCloud Go+",
+      "description": "Turn on if your SoundCloud account has Go+, so SoundCrate treats Go+ catalogue tracks as playable in full. SoundCloud does not report this, so you have to tell it.",
+      "default": false,
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "setup_status",
+      "description": "Check whether SoundCrate is ready on this computer and, if not, get the exact next steps."
+    },
+    {
+      "name": "start_setup",
+      "description": "Open SoundCrate's local setup page in the user's browser (served only on 127.0.0.1)."
+    },
+    {
+      "name": "search_tracks",
+      "description": "Search tracks by text and/or filters (genres, tags, BPM, duration, upload date)."
+    },
+    {
+      "name": "get_track",
+      "description": "Get one track by id or soundcloud.com URL."
+    },
+    {
+      "name": "get_related_tracks",
+      "description": "Tracks related to a track (SoundCloud's recommendations)."
+    },
+    {
+      "name": "get_my_tracks",
+      "description": "Tracks from the user's account to inspire playlists."
+    },
+    {
+      "name": "search_users",
+      "description": "Search artists, labels or DJs."
+    },
+    {
+      "name": "get_related_artists",
+      "description": "Artists similar to a given one, according to SoundCloud."
+    },
+    {
+      "name": "get_user_content",
+      "description": "Content from an artist, label or DJ."
+    },
+    {
+      "name": "search_playlists",
+      "description": "Search PUBLIC playlists from any SoundCloud user (without tracks); it does not find the user's private playlists, use get_my_playlists for those."
+    },
+    {
+      "name": "get_station",
+      "description": "A SoundCloud station (system playlist) with its tracks."
+    },
+    {
+      "name": "whoami",
+      "description": "Check the session: user, plan and subscriptions SoundCloud reports for the account, and whether Go+ is declared."
+    },
+    {
+      "name": "get_my_playlists",
+      "description": "The user's playlists, including private ones, without tracks."
+    },
+    {
+      "name": "get_playlist",
+      "description": "A playlist with its tracks, the user's own or another user's public one."
+    },
+    {
+      "name": "create_playlist",
+      "description": "Create a playlist."
+    },
+    {
+      "name": "add_tracks_to_playlist",
+      "description": "Append tracks to the end of a playlist without removing existing ones (duplicates are ignored)."
+    },
+    {
+      "name": "remove_tracks_from_playlist",
+      "description": "Remove one or more tracks from a playlist in a single write."
+    },
+    {
+      "name": "remove_track_from_playlist",
+      "description": "Remove one track from a playlist."
+    },
+    {
+      "name": "replace_track_in_playlist",
+      "description": "Replace a track with another at the same position (e.g."
+    },
+    {
+      "name": "suggest_tracks",
+      "description": "From 1 to 5 seed tracks, gathers their SoundCloud related tracks, removes duplicates, the seeds and anything already in exclude_playlist_id, applies BPM, dur…"
+    },
+    {
+      "name": "find_official_version",
+      "description": "For a track (especially a user upload), finds candidates for its official release: same title and artist, label, or same ISRC."
+    },
+    {
+      "name": "analyze_playlist",
+      "description": "Summary of a playlist for planning: total duration, BPM (min, median, max), Camelot keys, genres, years, duplicate tracks, BPM jumps above 6 and harmonic cla…"
+    },
+    {
+      "name": "update_playlist",
+      "description": "Change a playlist's title, description, genre or tags and/or reorder its tracks: sort_by (bpm, camelot, duration or released, with direction asc/desc) or tra…"
+    }
+  ],
+  "tools_generated": false,
+  "keywords": [
+    "soundcloud",
+    "playlists",
+    "music",
+    "dj",
+    "bpm",
+    "camelot",
+    "mcp"
+  ],
+  "license": "MIT",
+  "privacy_policies": [
+    "https://github.com/C4denaX/soundcrate-mcp/blob/main/PRIVACY.md"
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

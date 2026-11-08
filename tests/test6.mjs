@@ -45,7 +45,7 @@ assert.equal(r.not_listenable_removed, 5);
 let init = (await S.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })).result;
 assert.match(init.instructions, /has not declared Go\+/);
 assert.match(init.instructions, /go_plus_probable/);
-assert.equal(init.serverInfo.version, "1.6.0");
+assert.equal(init.serverInfo.version, "1.7.0");
 r = await call("whoami", {});
 assert.equal(r.go_plus_declared, false); assert.match(r.note, /SC_GO_PLUS/);
 

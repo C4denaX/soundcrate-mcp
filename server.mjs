@@ -1169,7 +1169,7 @@ async function removeTracks(playlist_id, track_ids) {
 // Servidor de doble versión, como prevé la especificación 2026-07-28:
 // - Clientes "legacy" (2025-11-25 y anteriores): handshake initialize / notifications/initialized.
 // - Clientes "modernos" (2026-07-28): sin handshake; cada petición lleva la versión en _meta y existe server/discover.
-export const VERSION = "1.6.0";
+export const VERSION = "1.7.0";
 const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const MODERN_VERSIONS = ["2026-07-28"];
 const META_VERSION = "io.modelcontextprotocol/protocolVersion";

@@ -1,0 +1,13 @@
+# Lo que NO va dentro del .mcpb (extensión de Claude Desktop): solo el servidor y sus metadatos.
+.git/
+.github/
+.claude-plugin/
+.mcp.json
+skills/
+tests/
+login.mjs
+*.mcpb
+*.bak*
+.DS_Store
+HANDOFF_CLAUDE_CODE.md
+README.es.md

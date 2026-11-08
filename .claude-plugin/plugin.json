@@ -1,0 +1,26 @@
+{
+  "name": "soundcrate",
+  "displayName": "SoundCrate",
+  "version": "1.7.0",
+  "description": "Dig, curate and reorder your SoundCloud playlists: search by genre, BPM, key or date, find related tracks and artists, build private playlists and order them by BPM or Camelot key. Runs locally; guided setup.",
+  "author": {
+    "name": "Sergio Ruiz",
+    "url": "https://github.com/C4denaX"
+  },
+  "homepage": "https://github.com/C4denaX/soundcrate-mcp",
+  "repository": "https://github.com/C4denaX/soundcrate-mcp",
+  "license": "MIT",
+  "keywords": ["soundcloud", "playlists", "music", "dj", "bpm", "camelot"],
+  "icon": "./icon.png",
+  "documentationUrl": "https://github.com/C4denaX/soundcrate-mcp#readme",
+  "supportUrl": "https://github.com/C4denaX/soundcrate-mcp/issues",
+  "privacyPolicyUrl": "https://github.com/C4denaX/soundcrate-mcp/blob/main/PRIVACY.md",
+  "userConfig": {
+    "go_plus": {
+      "type": "boolean",
+      "title": "I have SoundCloud Go+",
+      "description": "Turn on if your SoundCloud account has Go+, so SoundCrate treats Go+ catalogue tracks as playable in full. SoundCloud does not report this, so you have to tell it.",
+      "default": false
+    }
+  }
+}
