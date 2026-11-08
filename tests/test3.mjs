@@ -8,7 +8,7 @@ const lists = {
 };
 const view = (p) => ({ ...p, track_count: p.tracks.length, tracks: p.tracks.map((id) => ({ id })) });
 let puts = 0, inFlight = 0, maxInFlight = 0;
-S._setDeps({
+S._setDeps({ goPlus: false,
   kcGet: () => "rt", kcSet: () => {}, credentials: () => ({ clientId: "c", clientSecret: "s" }),
   tokenRequest: async () => ({ access_token: "at", refresh_token: "rt2", expires_in: 3600 }),
   fetch: async (url, o) => {
@@ -84,9 +84,9 @@ assert.equal(r.err, true); assert.match(r.out, /playlist_id/);
 
 // 6. whoami y versión.
 r = await call("whoami", { force_refresh: true });
-assert.deepEqual(r.out, { id: "7", username: "dj", plan: "Pro Plus", subscriptions: [{ id: "creator-pro-unlimited", name: "Artist Pro" }], token_refreshed: true });
+assert.deepEqual(r.out, { id: "7", username: "dj", plan: "Pro Plus", subscriptions: [{ id: "creator-pro-unlimited", name: "Artist Pro" }], token_refreshed: true, go_plus_declared: false, note: r.out.note });
 const init = await S.handle({ jsonrpc: "2.0", id: 2, method: "initialize", params: {} });
-assert.equal(init.result.serverInfo.version, "1.3.0");
+assert.equal(init.result.serverInfo.version, "1.4.0");
 const list = (await S.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })).result.tools;
 assert.doesNotMatch(list.find((t) => t.name === "search_tracks").description, /blocked = no reproducible/);
 console.log("OK");

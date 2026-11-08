@@ -13,6 +13,8 @@ const deps = {
   kcSet: lib.kcSet,
   credentials: lib.credentials,
   tokenRequest: lib.tokenRequest,
+  // La API no informa de Go+ (/me solo lista planes de artista): el usuario lo declara con SC_GO_PLUS=1.
+  goPlus: /^(1|true|yes|si|sí)$/i.test(process.env.SC_GO_PLUS || ""),
 };
 export function _setDeps(d) {
   Object.assign(deps, d);
@@ -100,6 +102,27 @@ function camelot(k) {
   return n ? `${n}${mode === "min" ? "A" : "B"}` : null;
 }
 
+// 'access' dice qué deja reproducir la API fuera de SoundCloud, no qué puede escuchar el usuario.
+// 'listen' lo traduce para el oyente usando solo metadatos (sin tocar /streams: las condiciones de la API
+// prohíben intentar acceder a contenido exclusivo de Go). En 1.760 pistas reales: todas las preview tienen ISRC
+// (catálogo distribuido) y casi todas las blocked también; las blocked sin sello ni ISRC son remixes y bootlegs.
+function listenOf(t) {
+  if (t.access === "playable") return "full";
+  if (t.access === "preview") return "go_plus";
+  if (t.access === "blocked") return t.isrc || t.label_name ? "go_plus_probable" : "restricted";
+  return null;
+}
+const listenable = () => new Set(deps.goPlus ? ["full", "go_plus", "go_plus_probable"] : ["full"]);
+const LISTEN_NOTE =
+  "Cada pista trae 'listen': full = suena entera para cualquiera; go_plus = catálogo que sin suscripción solo da un fragmento y con Go+ suena entera; " +
+  "go_plus_probable = catálogo de sello que la API no deja reproducir fuera de SoundCloud, con Go+ suele sonar entera en SoundCloud (sin garantía por región); " +
+  "restricted = bloqueada y sin sello ni ISRC (derechos, región o decisión del autor): puede no sonar ni con Go+. " +
+  "Todas se pueden añadir a playlists. La API no informa de si el usuario tiene Go+.";
+const listenStatus = () =>
+  deps.goPlus
+    ? "El usuario ha declarado Go+ (SC_GO_PLUS): go_plus y go_plus_probable las puede escuchar completas."
+    : "El usuario no ha declarado Go+ (SC_GO_PLUS): solo 'full' suena entera; go_plus da un fragmento.";
+
 const cleanUrl = (u) => (u ? String(u).split("?")[0] : null);
 
 const slimTrack = (t) => ({
@@ -107,7 +130,8 @@ const slimTrack = (t) => ({
   title: t.title,
   user: t.user?.username,
   ...(t.metadata_artist ? { artist: t.metadata_artist } : {}),
-  access: t.access, // playable | preview | blocked: restricción vista por la app, no por la cuenta (con Go+ suelen sonar)
+  access: t.access, // playable | preview | blocked: lo que la API deja reproducir fuera de SoundCloud
+  listen: listenOf(t), // full | go_plus | go_plus_probable | restricted: lo que oye el usuario en SoundCloud
   duration: mmss(t.duration),
   bpm: t.bpm ? Math.round(t.bpm * 10) / 10 : null,
   key: t.key_signature || null,
@@ -355,6 +379,7 @@ function analyzeTracks(raw, hidden = 0) {
     genres: topN(tally(raw.map((t) => t.genre || "sin dato")), 8),
     years: years.length ? { min: Math.min(...years), max: Math.max(...years) } : null,
     access: tally(raw.map((t) => t.access || "desconocido")),
+    listen: tally(raw.map((t) => listenOf(t) || "desconocido")),
     duplicates: duplicates.slice(0, 20),
     bpm_jumps: { total: jumps.length, examples: jumps.slice(0, 10) },
     harmonic_clashes: { total: clashes.length, examples: clashes.slice(0, 10) },
@@ -366,8 +391,9 @@ const TOOLS = {
   search_tracks: {
     description:
       "Busca pistas por texto y/o filtros (géneros, etiquetas, BPM, duración, fecha de subida). Devuelve id, título, usuario, BPM, tonalidad, género, sello, fecha de lanzamiento, reproducciones, likes y 'access'. " +
-      "'access' es la restricción que ve la app registrada, no la cuenta del oyente: playable = la app puede reproducirla entera; preview/blocked = la app no puede, pero con Go+ suelen reproducirse en SoundCloud y se pueden añadir a playlists sin problema. No descartes pistas por ser preview o blocked. " +
-      "bpm y key los rellena quien sube la pista y a menudo faltan: filtrar por BPM deja fuera las pistas sin ese dato. Para seguir, pasa next_cursor como cursor.",
+      LISTEN_NOTE +
+      " only_listenable=true deja solo las que el usuario puede escuchar completas (con Go+ declarado incluye go_plus y go_plus_probable). " +
+      "bpm y key casi siempre vienen; las pistas sin ese dato quedan fuera al filtrar por BPM. Para seguir, pasa next_cursor como cursor.",
     inputSchema: {
       type: "object",
       properties: {
@@ -385,6 +411,7 @@ const TOOLS = {
           type: "boolean",
           description: "Incluir pistas preview/blocked además de las reproducibles (por defecto true)",
         },
+        only_listenable: { type: "boolean", description: "Solo pistas que el usuario puede escuchar completas en SoundCloud" },
         cursor: { type: "string", description: "next_cursor de una búsqueda anterior, para la página siguiente" },
       },
     },
@@ -410,7 +437,18 @@ const TOOLS = {
         out_of_range = tracks.filter((t) => !ok(t)).length;
         tracks = tracks.filter(ok);
       }
-      return { tracks, ...(out_of_range ? { out_of_range_removed: out_of_range } : {}), next_cursor: r.next_cursor };
+      let not_listenable = 0;
+      if (a.only_listenable) {
+        const ok = listenable();
+        not_listenable = tracks.filter((t) => !ok.has(t.listen)).length;
+        tracks = tracks.filter((t) => ok.has(t.listen));
+      }
+      return {
+        tracks,
+        ...(out_of_range ? { out_of_range_removed: out_of_range } : {}),
+        ...(not_listenable ? { not_listenable_removed: not_listenable } : {}),
+        next_cursor: r.next_cursor,
+      };
     },
   },
   get_track: {
@@ -583,6 +621,8 @@ const TOOLS = {
         plan: me.plan ?? null,
         subscriptions: (me.subscriptions || []).map((x) => ({ id: x?.product?.id ?? null, name: x?.product?.name ?? null })),
         token_refreshed: !!force_refresh,
+        go_plus_declared: !!deps.goPlus,
+        note: "La API no informa de Go+ (subscriptions solo lista planes de artista). Se declara con SC_GO_PLUS=1 en la configuración del servidor.",
       };
     },
   },
@@ -736,6 +776,7 @@ const TOOLS = {
         duration_max_s: { type: "integer" },
         genres: { type: "array", items: { type: "string" }, description: "Filtra por género (sin distinguir mayúsculas)" },
         include_restricted: { type: "boolean", description: "Incluir preview/blocked. Por defecto true" },
+        only_listenable: { type: "boolean", description: "Solo pistas que el usuario puede escuchar completas en SoundCloud" },
       },
       required: ["seed_track_ids"],
     },
@@ -766,7 +807,8 @@ const TOOLS = {
       const lo = num(a.bpm_min), hi = num(a.bpm_max), dmin = num(a.duration_min_s), dmax = num(a.duration_max_s);
       const genres = list(a.genres).map(norm);
       const seedCams = seedRaw.map((t) => camelot(t.key_signature)).filter(Boolean);
-      const dropped = { bpm: 0, duration: 0, genre: 0 };
+      const dropped = { bpm: 0, duration: 0, genre: 0, not_listenable: 0 };
+      const canListen = listenable();
       const cands = [];
       for (const { raw, count } of pool.values()) {
         const bpm = raw.bpm ? round1(raw.bpm) : null;
@@ -781,6 +823,10 @@ const TOOLS = {
         }
         if (genres.length && !genres.includes(norm(raw.genre))) {
           dropped.genre++;
+          continue;
+        }
+        if (a.only_listenable && !canListen.has(listenOf(raw))) {
+          dropped.not_listenable++;
           continue;
         }
         const cam = camelot(raw.key_signature);
@@ -960,7 +1006,8 @@ export async function handle(msg) {
         return reply({
           protocolVersion: params?.protocolVersion || "2025-06-18",
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "soundcrate", version: "1.3.0" },
+          serverInfo: { name: "soundcrate", version: "1.4.0" },
+          instructions: `${LISTEN_NOTE} ${listenStatus()}`,
         });
       case "ping":
         return reply({});
