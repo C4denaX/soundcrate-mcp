@@ -156,7 +156,9 @@ assert.throws(() => createStore({ env: { SC_SECRET_SERVICE: "bad name" }, platfo
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  assert.match(defaultFilePath({ XDG_CONFIG_HOME: "/x" }, "linux"), /^\/x[\\/]soundcrate[\\/]credentials\.json$/);
-  assert.match(defaultFilePath({ APPDATA: "C:\\Users\\u\\AppData\\Roaming" }, "win32"), /AppData.Roaming.soundcrate.credentials\.json$/);
+  assert.equal(defaultFilePath({ XDG_CONFIG_HOME: "/x" }, "linux"), "/x/soundcrate/credentials.json");
+  assert.equal(defaultFilePath({ APPDATA: "C:\\Users\\u\\AppData\\Roaming" }, "win32"), "C:\\Users\\u\\AppData\\Roaming\\soundcrate\\credentials.json");
+  assert.equal(defaultFilePath({}, "linux", { homedir: () => "/home/u" }), "/home/u/.config/soundcrate/credentials.json");
+  assert.equal(defaultFilePath({ SC_SECRETS_FILE: "/tmp/c.json" }, "win32"), "/tmp/c.json");
 }
 console.log("OK");

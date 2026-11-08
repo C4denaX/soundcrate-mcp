@@ -41,12 +41,18 @@ jobs:
             echo -n "ci-password" | gnome-keyring-daemon --unlock --replace --daemonize --components=secrets >/dev/null
             node tests/store-live.mjs'
       - name: Without a Secret Service the error explains the fix
+        # D-Bus apuntando a un socket inexistente simula un servidor sin escritorio ni llavero.
+        env:
+          DBUS_SESSION_BUS_ADDRESS: unix:path=/nonexistent/soundcrate-bus
         run: |
           node --input-type=module -e '
             const { createStore } = await import("./secrets.mjs");
-            const p = createStore().probe();
+            const s = createStore();
+            const p = s.probe();
             console.log(JSON.stringify(p));
-            if (p.ok || !/SC_SECRET_STORE=file/.test(p.problem)) process.exit(1);'
+            if (p.ok || !/SC_SECRET_STORE=file/.test(p.problem)) process.exit(1);
+            try { s.set("probe_account", "value12345"); process.exit(1); }
+            catch (e) { console.log(e.name, "-", e.message); if (!e.setup) process.exit(1); }'
       - name: File fallback
         run: SC_SECRET_STORE=file node tests/store-live.mjs
 

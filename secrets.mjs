@@ -244,8 +244,10 @@ function wincred({ run, service }) {
 }
 
 // ---------- Fichero (solo bajo petición) ----------
-export function defaultFilePath(env = process.env, platform = process.platform, os = nodeOs, path = nodePath) {
+export function defaultFilePath(env = process.env, platform = process.platform, os = nodeOs) {
   if (env.SC_SECRETS_FILE) return env.SC_SECRETS_FILE;
+  // Separadores del sistema de destino (no del que ejecuta), para que la ruta sea siempre coherente.
+  const path = platform === "win32" ? nodePath.win32 : nodePath.posix;
   if (platform === "win32") return path.join(env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "soundcrate", "credentials.json");
   return path.join(env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "soundcrate", "credentials.json");
 }
