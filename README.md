@@ -30,6 +30,9 @@ Llavero de macOS (servicio `soundcloud-mcp`). No hay ningún servidor público.
 | `get_user_content(user_id \| url, kind, sort?)` | Pistas, likes, reposts o playlists de un artista o DJ. |
 | `search_playlists(query)` | Playlists públicas de cualquiera. |
 | `get_station(station_id)` | Una emisora de SoundCloud con sus pistas. |
+| `suggest_tracks(seed_track_ids[1-5], exclude_playlist_id?, limit?, bpm_min?, bpm_max?, duration_min_s?, duration_max_s?, genres?)` | Candidatas a partir de varias pistas semilla: relacionadas de SoundCloud, sin duplicados ni lo que ya está en la playlist, con filtros. Ordena por cuántas semillas la sugieren y si mezclan en armonía. No escribe nada. |
+| `find_official_version(track_id, limit?)` | Candidatas a la versión oficial de una subida de usuario, con motivos (ISRC, sello, mismo artista). Solo sugiere. |
+| `analyze_playlist(playlist_id \| url)` | Resumen de una playlist: duración, BPM (mín., mediana, máx.), Camelot, géneros, años, duplicados, saltos de BPM y choques armónicos entre pistas consecutivas. Solo lectura. |
 
 **Tu cuenta y tus playlists**
 
@@ -43,6 +46,7 @@ Llavero de macOS (servicio `soundcloud-mcp`). No hay ningún servidor público.
 | `remove_tracks_from_playlist(playlist_id, track_ids[])` | Quita varias pistas en una sola escritura. |
 | `remove_track_from_playlist(playlist_id, track_id)` | Quita una pista. |
 | `replace_track_in_playlist(playlist_id, old_track_id, new_track_id)` | Sustituye una pista conservando su posición. |
+| `update_playlist(playlist_id, title?, description?, genre?, tags?, sort_by?, direction?, track_order?)` | Cambia título, descripción, género o etiquetas y/o reordena: `sort_by` (`bpm`, `camelot`, `duration`, `released`) o `track_order` con todas las ids. Nunca añade ni quita pistas. |
 
 Cada pista trae `bpm`, tonalidad (`key`, p. ej. `F:min`) y su equivalente **Camelot** (`camelot`, p. ej. `4A`)
 para mezclar en armonía, además de género, etiquetas, sello, fecha de lanzamiento, ISRC, reproducciones y likes.
@@ -55,18 +59,26 @@ Las listas largas se recorren pasando el `next_cursor` de una respuesta como `cu
 - «Coge estas tres pistas, busca relacionadas que no estén ya en mi playlist *Warm-up* y propónme diez».
 - «Mira qué han repostado este mes los DJs que sigo y sácame lo que encaje con mi playlist *Peak time*».
 - «Quiero algo parecido a Amelie Lens: artistas relacionados y sus pistas más recientes».
+- «Analiza mi playlist *Peak time* y dime dónde hay saltos de BPM o choques de tonalidad».
+- «Ordena *Warm-up* por BPM ascendente y ponle el género Techno».
 
 No incluye descargas ni URLs de streaming (las condiciones de la API de SoundCloud lo prohíben), ni borrado
 de playlists, para que un error no pueda destruir nada.
 
 ### Cómo protege tus playlists
 
+- `update_playlist` nunca cambia el conjunto de pistas. Si tras escribir SoundCloud no devuelve las mismas pistas, restaura el orden anterior y avisa.
 - La API de SoundCloud **reemplaza la lista entera** al escribir una playlist. Por eso cada cambio lee la
   playlist, la modifica y la escribe, y los cambios sobre una misma playlist van **en cola**, uno detrás de otro,
   aunque Claude los pida en paralelo.
 - Si la API oculta alguna pista al leer la playlist (`track_count` mayor que las pistas devueltas), el servidor
   **no escribe nada**, porque reescribirla borraría las pistas que no ve. `get_playlist` lo indica con
   `hidden_by_api`.
+
+### Etiquetas de playlist
+
+SoundCloud guarda las etiquetas separadas por espacios, y las que tienen espacios van entre comillas. El parámetro
+`tags` de `update_playlist` acepta una lista separada por comas (`"warm, deep house"`) y la convierte a ese formato.
 
 ### Sobre BPM y filtros
 
