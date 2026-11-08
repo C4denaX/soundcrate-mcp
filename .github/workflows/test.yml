@@ -84,3 +84,24 @@ jobs:
       - name: File fallback
         shell: bash
         run: SC_SECRET_STORE=file node tests/store-live.mjs
+
+  # Extensión de Claude Desktop (.mcpb): validarla y empaquetarla con la herramienta oficial.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx -y @anthropic-ai/mcpb@2.1.2 validate manifest.json
+      - run: npx -y @anthropic-ai/mcpb@2.1.2 pack . soundcrate.mcpb
+      - name: The bundle contains only the server and its metadata
+        run: |
+          unzip -Z1 soundcrate.mcpb | sort | tee files.txt
+          for f in manifest.json server.mjs lib.mjs secrets.mjs setup.mjs icon.png LICENSE PRIVACY.md; do grep -qx "$f" files.txt || { echo "missing $f"; exit 1; }; done
+          if grep -E '^(tests/|\.github/|skills/|\.claude-plugin/)' files.txt; then echo "unexpected files"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: soundcrate-mcpb
+          path: soundcrate.mcpb
+

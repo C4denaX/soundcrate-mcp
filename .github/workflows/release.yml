@@ -1,0 +1,38 @@
+name: release
+# Al publicar una etiqueta vX.Y.Z: pruebas, empaquetado de la extensión de Claude Desktop y release en GitHub.
+# El fichero se llama siempre soundcrate.mcpb, así que este enlace descarga siempre la última versión:
+# https://github.com/C4denaX/soundcrate-mcp/releases/latest/download/soundcrate.mcpb
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tag matches every version field
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          node -e '
+            const v = process.argv[1], fs = require("fs");
+            const files = { "package.json": "version", "manifest.json": "version", ".claude-plugin/plugin.json": "version" };
+            for (const [f, k] of Object.entries(files)) {
+              const got = JSON.parse(fs.readFileSync(f, "utf8"))[k];
+              if (got !== v) { console.error(`${f}: ${got} != ${v}`); process.exit(1); }
+            }' "$V"
+      - run: npm test
+      - run: npx -y @anthropic-ai/mcpb@2.1.2 pack . soundcrate.mcpb
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" soundcrate.mcpb \
+            --title "SoundCrate $GITHUB_REF_NAME" \
+            --notes "Claude Desktop: download **soundcrate.mcpb** and double-click it. Other apps: see the README."
