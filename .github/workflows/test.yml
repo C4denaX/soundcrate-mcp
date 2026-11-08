@@ -2,15 +2,79 @@ name: test
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
 jobs:
+  # Batería completa (sin red ni almacenes reales) en los tres sistemas.
   test:
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        node: [18, 20, 22]
+        include:
+          - { os: ubuntu-latest, node: 18 }
+          - { os: ubuntu-latest, node: 20 }
+          - { os: ubuntu-latest, node: 22 }
+          - { os: macos-latest, node: 22 }
+          - { os: windows-latest, node: 18 }
+          - { os: windows-latest, node: 22 }
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
       - run: npm test
+
+  # Almacén de secretos REAL de cada sistema (servicio de prueba aleatorio, se borra al terminar).
+  store-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install GNOME Keyring and secret-tool
+        run: sudo apt-get update && sudo apt-get install -y gnome-keyring libsecret-tools dbus-x11
+      - name: Secret Service (GNOME Keyring)
+        run: |
+          dbus-run-session -- sh -c '
+            echo -n "ci-password" | gnome-keyring-daemon --unlock --replace --daemonize --components=secrets >/dev/null
+            node tests/store-live.mjs'
+      - name: Without a Secret Service the error explains the fix
+        run: |
+          node --input-type=module -e '
+            const { createStore } = await import("./secrets.mjs");
+            const p = createStore().probe();
+            console.log(JSON.stringify(p));
+            if (p.ok || !/SC_SECRET_STORE=file/.test(p.problem)) process.exit(1);'
+      - name: File fallback
+        run: SC_SECRET_STORE=file node tests/store-live.mjs
+
+  store-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Temporary unlocked keychain
+        run: |
+          security create-keychain -p ci ci.keychain
+          security default-keychain -s ci.keychain
+          security unlock-keychain -p ci ci.keychain
+          security set-keychain-settings ci.keychain
+      - run: node tests/store-live.mjs
+      - run: SC_SECRET_STORE=file node tests/store-live.mjs
+
+  store-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Windows Credential Manager
+        run: node tests/store-live.mjs
+      - name: File fallback
+        shell: bash
+        run: SC_SECRET_STORE=file node tests/store-live.mjs
