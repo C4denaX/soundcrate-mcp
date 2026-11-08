@@ -21,7 +21,7 @@ Llavero de macOS (servicio `soundcloud-mcp`). No hay ningún servidor público.
 
 | Herramienta | Qué hace |
 |---|---|
-| `search_tracks(query?, genres?, tags?, bpm_min?, bpm_max?, duration_min_s?, duration_max_s?, uploaded_after?, uploaded_before?, limit?, cursor?)` | Busca por texto y/o filtros, hasta 200 resultados por página. |
+| `search_tracks(query?, genres?, tags?, bpm_min?, bpm_max?, duration_min_s?, duration_max_s?, uploaded_after?, uploaded_before?, only_listenable?, limit?, cursor?)` | Busca por texto y/o filtros, hasta 200 resultados por página. |
 | `get_track(track_id \| url)` | Datos de una pista por id o por URL. |
 | `get_related_tracks(track_id \| url, exclude_playlist_id?, limit?, cursor?)` | Pistas relacionadas según SoundCloud, sin las que ya tienes en una playlist. |
 | `get_my_tracks(source, limit?, cursor?)` | Tus `likes`, lo último escuchado (`recently_played`), tu `feed`, las subidas de quien sigues (`followings`) o tus `reposts`. |
@@ -86,11 +86,26 @@ El filtro de BPM de la API es aproximado: en pruebas reales, cerca del 10 % de l
 rango pedido. El servidor vuelve a filtrar de forma estricta y dice cuántas quitó en `out_of_range_removed`, así
 que una página puede traer menos pistas que `limit`.
 
-### `access`: playable, preview y blocked
+### Go+, `access` y `listen`
 
-El campo `access` de cada pista refleja lo que puede reproducir **la app registrada**, no tu cuenta. Con Go+,
-muchas pistas marcadas como `preview` o `blocked` (sobre todo de sellos) se reproducen sin problema en la web y
-en la app de SoundCloud, y se pueden añadir a playlists igual que las demás. No las descartes por ese campo.
+El campo `access` dice qué deja reproducir la API **fuera de SoundCloud**, no lo que tú puedes escuchar. Según la
+guía de la API, una pista puede estar restringida por su autor, por ser de pago o por región, y entonces sale como
+`blocked`. Por eso cada pista trae también `listen`, que lo traduce para el oyente:
+
+| `listen` | Viene de | Qué significa |
+|---|---|---|
+| `full` | `playable` | Suena entera para cualquiera. |
+| `go_plus` | `preview` | Catálogo distribuido: sin suscripción, solo un fragmento; con Go+, entera. |
+| `go_plus_probable` | `blocked` con sello o ISRC | Catálogo de sello que la API no deja reproducir fuera de SoundCloud. Con Go+ suele sonar entera en SoundCloud, sin garantía por región. |
+| `restricted` | `blocked` sin sello ni ISRC | Suele ser un remix o bootleg bloqueado por derechos, región o decisión del autor. Puede no sonar ni con Go+. |
+
+Todas se pueden añadir a playlists. La clasificación sale de los metadatos (en una muestra de 1.760 pistas, todas
+las `preview` y el 90 % de las `blocked` tenían sello o ISRC). El servidor **nunca** llama a `/streams`: las
+condiciones de la API prohíben intentar acceder a contenido exclusivo de Go.
+
+**La API no informa de si tienes Go+**: `/me` solo lista planes de artista. Si lo tienes, decláralo con
+`SC_GO_PLUS=1` (paso 5). Con eso, `only_listenable: true` en `search_tracks` o `suggest_tracks` deja `full`,
+`go_plus` y `go_plus_probable`; sin Go+ declarado deja solo `full`. `whoami` dice si está declarado.
 
 ## 1. Registrar la app en SoundCloud (requiere Artist Pro)
 
@@ -145,13 +160,15 @@ Claude → Ajustes → Desarrollador → Editar configuración (`claude_desktop_
   "mcpServers": {
     "soundcloud": {
       "command": "/opt/homebrew/bin/node",
-      "args": ["/Users/<tu-usuario>/Claude/soundcrate-mcp/server.mjs"]
+      "args": ["/Users/<tu-usuario>/Claude/soundcrate-mcp/server.mjs"],
+      "env": { "SC_GO_PLUS": "1" }
     }
   }
 }
 ```
 
-Si el fichero ya tiene otras entradas en `mcpServers`, añade solo el bloque `"soundcloud"`.
+Quita la línea `"env"` si no tienes SoundCloud Go+ (ver «Go+, `access` y `listen`»). Si el fichero ya tiene otras
+entradas en `mcpServers`, añade solo el bloque `"soundcloud"`.
 Cierra la app de Claude del todo (Cmd+Q) y vuelve a abrirla.
 
 Tras actualizar `server.mjs`, cierra la app de Claude del todo (Cmd+Q) y vuelve a abrirla para que cargue
