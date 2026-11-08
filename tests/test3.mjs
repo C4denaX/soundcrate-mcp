@@ -86,7 +86,7 @@ assert.equal(r.err, true); assert.match(r.out, /playlist_id/);
 r = await call("whoami", { force_refresh: true });
 assert.deepEqual(r.out, { id: "7", username: "dj", plan: "Pro Plus", subscriptions: [{ id: "creator-pro-unlimited", name: "Artist Pro" }], token_refreshed: true });
 const init = await S.handle({ jsonrpc: "2.0", id: 2, method: "initialize", params: {} });
-assert.equal(init.result.serverInfo.version, "1.2.0");
+assert.equal(init.result.serverInfo.version, "1.3.0");
 const list = (await S.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })).result.tools;
 assert.doesNotMatch(list.find((t) => t.name === "search_tracks").description, /blocked = no reproducible/);
 console.log("OK");
