@@ -273,7 +273,8 @@ function fileStore({ service, env, platform, fs = nodeFs }) {
   };
   return {
     name: "file",
-    label: `Unencrypted file ${file} (permissions 600)`,
+    // En Windows no hay permisos 600: el fichero queda dentro del perfil del usuario.
+    label: `Unencrypted file ${file} (${platform === "win32" ? "inside your user profile" : "permissions 600"})`,
     file,
     get(account) {
       return read()?.[service]?.[account] ?? null;
@@ -292,7 +293,8 @@ function fileStore({ service, env, platform, fs = nodeFs }) {
       return true;
     },
     probe() {
-      return { ok: true, problem: null, warning: `Secrets are stored unencrypted in ${file}, protected only by file permissions.` };
+      const guard = platform === "win32" ? "the user profile's access rules" : "file permissions";
+      return { ok: true, problem: null, warning: `Secrets are stored unencrypted in ${file}, protected only by ${guard}.` };
     },
   };
 }
