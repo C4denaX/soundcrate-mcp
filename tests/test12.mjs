@@ -405,12 +405,15 @@ await tcase("T5 el cerrojo serializa la misma playlist dada como id y como URN",
     call("add_tracks_to_playlist", { playlist_id: "10", track_ids: ["7"] }),
     call("add_tracks_to_playlist", { playlist_id: "soundcloud:playlists:10", track_ids: ["8"] }),
     call("remove_tracks_from_playlist", { playlist_id: "soundcloud:playlists:10", track_ids: ["1"] }),
+    call("remove_tracks_from_playlist", { playlist_id: "10", track_ids: ["9"] }),
     call("replace_track_in_playlist", { playlist_id: "soundcloud:playlists:10", old_track_id: "2", new_track_id: "20" }),
-    call("update_playlist", { playlist_id: "10", title: "T" }),
+    call("replace_track_in_playlist", { playlist_id: "10", old_track_id: "3", new_track_id: "30" }),
+    call("update_playlist", { playlist_id: "soundcloud:playlists:10", title: "T" }),
+    call("update_playlist", { playlist_id: "10", title: "T2" }),
   ]);
   for (const r of rs) assert.equal(r.err, false, r.text);
   assert.equal(maxInFlight, 1, "nunca dos peticiones a la vez sobre la misma playlist");
-  assert.deepEqual([...L()].sort((a, b) => a - b), [3, 4, 5, 6, 7, 8, 20], "no se pierde ningún cambio");
+  assert.deepEqual([...L()].sort((a, b) => a - b), [4, 5, 6, 7, 8, 20, 30], "no se pierde ningún cambio");
 });
 
 if (fails.length) {

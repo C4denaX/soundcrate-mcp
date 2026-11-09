@@ -1216,7 +1216,7 @@ const TOOLS = {
       return withPlaylistLock(pid, async () => {
         const { ok, ignored } = splitIds(track_ids);
         const wanted = [...new Set(ok)];
-        if (list(track_ids).length && !wanted.length) throw new Error("track_ids must be an array of numeric track ids. Nothing was changed.");
+        if (!wanted.length) throw new Error("track_ids must be an array of numeric track ids. Nothing was changed.");
         const { ids: cur } = await stableRead(pid);
         const add = wanted.filter((x) => !cur.includes(x));
         if (!add.length) return { added: 0, total: cur.length, note: "Nothing new to add.", ...ignoredNote(ignored) };
@@ -1683,6 +1683,8 @@ function coerceArg(name, v, sch) {
       if (Array.isArray(v)) {
         // Una lista en un campo de texto (p. ej. tags:["dark","techno"]): se une. Los nulos se descartan.
         const parts = v.filter((x) => x != null);
+        // Vacía o solo de nulos: no hay valor. Cuenta como omitido (el campo no se toca); vaciar un campo exige "" explícito.
+        if (!parts.length) return undefined;
         if (parts.every((x) => typeof x === "string" || (typeof x === "number" && Number.isFinite(x)))) {
           return parts.map(String).join(name === "tags" ? ", " : " "); // tags: toTagList entrecomilla los que llevan espacios
         }
@@ -1703,6 +1705,10 @@ function coerceArg(name, v, sch) {
       }
       if (!Array.isArray(arr)) return bad("a list (an array, or text like \"1,2\")");
       const it = sch.items || {};
+      // Una lista que solo trae nulos no dice nada: error claro en vez de seguir como si fuera una lista vacía.
+      if (arr.length && arr.every((x) => x === null || x === undefined)) {
+        throw new Error(`Argument "${name}": the list only has empty (null) entries; give at least one value, or leave it out.`);
+      }
       return arr.flatMap((x, i) => {
         if (x === null || x === undefined) return []; // los nulos se descartan; "item N" cuenta la posición original
         if (it.type === "string") {
@@ -1730,7 +1736,9 @@ function coerceArgs(schema, args) {
     }
     if (v === undefined) continue;
     try {
-      out[name] = coerceArg(name, v, sch);
+      const c = coerceArg(name, v, sch);
+      if (c === undefined) delete out[name]; // equivale a omitido
+      else out[name] = c;
     } catch (e) {
       problems.push(e.message);
     }
