@@ -8,7 +8,9 @@ async function boot(extra = {}) {
   const port = await freePort();
   const m = new Map([["client_id", "abcdefgh123"], ["client_secret", "secret-12345"]]);
   const store = { label: "mem", get: (a) => m.get(a) ?? null, set: (a, v) => m.set(a, v), del: (a) => m.delete(a), probe: () => ({ ok: true }) };
-  const s = await startSetup({ store, credentials: () => ({ clientId: m.get("client_id"), clientSecret: m.get("client_secret") }), redirectUri: `http://127.0.0.1:${port}/callback`, open: false, ...extra });
+  const s = await startSetup({ store, credentials: () => ({ clientId: m.get("client_id"), clientSecret: m.get("client_secret") }), redirectUri: `http://127.0.0.1:${port}/callback`, open: false,
+    fetchFn: async () => Response.json({ username: "tester" }), // /me del canje: nunca a la red real
+    ...extra });
   return { s, m, base: `http://127.0.0.1:${port}`, k: new URL(s.url).searchParams.get("k") };
 }
 const txt = (h) => h.replace(/<style[\s\S]*?<\/style>/, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -79,7 +81,13 @@ test("state inválido en /callback: una sola indicación (no badLink + cbHint), 
   try {
     for (const lang of ["en", "es"]) {
       const h = txt(await (await fetch(`${t.base}/callback?code=C&state=zzz`, { headers: { "accept-language": lang } })).text());
-      assert.doesNotMatch(h, /empiece de nuevo|start the setup again|Ask your assistant to start|pide al asistente que empiece/i, h);
+      // textos reales de badLink, leídos de una ruta que sí lo muestra (clave k incorrecta → 403)
+      const bl = await fetch(`${t.base}/setup/connect?k=mala`, { headers: { "accept-language": lang } });
+      assert.equal(bl.status, 403);
+      const badLink = txt(await bl.text()).match(lang === "es" ? /Este enlace.*?de nuevo\./ : /This setup link.*?again\./)?.[0];
+      assert.ok(badLink && /(empiece|start the setup)/.test(badLink), `badLink ${lang}: ${badLink}`);
+      assert.ok(!h.includes(badLink), `badLink en /callback (${lang}): ${h}`);
+      assert.doesNotMatch(h, /empiece la configuración de nuevo|start the setup again/i, h);
       assert.match(h, lang === "es" ? /repite el paso 3/ : /try step 3 again/);
       assert.ok(!h.includes(t.k));
     }
