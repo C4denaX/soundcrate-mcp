@@ -4,6 +4,12 @@
 // Seguridad: solo escucha en 127.0.0.1 (el host de la Redirect URI), exige una clave aleatoria de un solo uso en
 // cada petición (contra CSRF desde otras webs), comprueba Host (contra DNS rebinding) y Origin, usa PKCE + state
 // en OAuth y sirve las páginas con CSP estricta y sin Referer (la clave no sale hacia soundcloud.com).
+//
+// CSRF en el POST de credenciales: la defensa real es la clave aleatoria (una web ajena no la conoce). Origin y
+// Sec-Fetch-Site son un refuerzo. Con "Referrer-Policy: no-referrer" los navegadores envían "Origin: null" en el
+// POST del formulario (aunque sea del mismo origen), así que "null" solo se acepta si el navegador declara además
+// Sec-Fetch-Site: same-origin (o no manda Sec-Fetch-Site: navegadores antiguos). Cualquier otro valor de
+// Sec-Fetch-Site (cross-site, same-site, none) se rechaza.
 
 import http from "node:http";
 import crypto from "node:crypto";
@@ -17,15 +23,25 @@ const sameSecret = (a, b) => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
-// Abre una URL en el navegador por defecto, en cualquier sistema. Devuelve true si se pudo lanzar.
-export function openBrowser(url, platform = process.platform) {
+// Abre una URL en el navegador por defecto, en cualquier sistema. Devuelve true solo si hay indicios razonables de
+// que se abrió: en Linux sin sesión gráfica (SSH, contenedor) ni se intenta; si el comando termina con error, es
+// false; si sigue vivo pasado un rato (algunos xdg-open esperan al navegador), se da por abierto.
+export function openBrowser(url, platform = process.platform, { env = process.env, timeoutMs = 3000 } = {}) {
+  if (platform !== "darwin" && platform !== "win32" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return Promise.resolve(false);
   const [cmd, args] =
     platform === "darwin" ? ["open", [url]] : platform === "win32" ? ["rundll32", ["url.dll,FileProtocolHandler", url]] : ["xdg-open", [url]];
   return new Promise((resolve) => {
     try {
-      const child = execFile(cmd, args, { windowsHide: true }, () => {});
-      child.on("error", () => resolve(false));
-      child.on("spawn", () => resolve(true));
+      const child = execFile(cmd, args, { windowsHide: true, env }, (err) => {
+        clearTimeout(timer);
+        resolve(!err);
+      });
+      const timer = setTimeout(() => resolve(true), timeoutMs);
+      timer.unref();
+      child.on("error", () => {
+        clearTimeout(timer);
+        resolve(false);
+      });
     } catch {
       resolve(false);
     }
@@ -40,8 +56,11 @@ const T = {
     s1: "1. Register a SoundCloud app",
     s1a: "Open",
     s1b: "(you need a SoundCloud Artist Pro plan) and create a new app with these values:",
-    name: "Name", desc: "Description", web: "Website", any: "any website of yours", redirect: "Redirect URI",
+    name: "Name", desc: "Description", descVal: "Local AI assistant to manage my own playlists", web: "Website", any: "any website of yours", redirect: "Redirect URI",
     s1c: "SoundCloud will show you a Client ID and a Client Secret.",
+    terms1: "Important: by creating the app you accept the",
+    terms2: "SoundCloud API Terms of Use",
+    terms3: ". Section 03 forbids using content obtained through the API (including titles, tags and other text) as input to any artificial intelligence technology, and SoundCloud can revoke an app's API access without notice. SoundCrate sends this kind of data to your AI assistant, so you use it at your own responsibility.",
     s2: "2. Paste the app credentials",
     save: "Save credentials",
     saved: "Credentials saved.",
@@ -56,6 +75,7 @@ const T = {
     errTitle: "Something went wrong",
     retry: "Back to the setup page",
     badLink: "This setup link is not valid or has expired. Ask your assistant to start the setup again.",
+    reconnect: "You changed the app credentials: connect your account again (step 3).",
     badId: "The Client ID does not look right (letters, numbers, - and _ only).",
     badSecret: "The Client Secret does not look right (8-256 printable characters, no spaces at the ends).",
     envNote: "SC_CLIENT_ID / SC_CLIENT_SECRET are set in the server environment and take priority.",
@@ -66,8 +86,11 @@ const T = {
     s1: "1. Registra una app en SoundCloud",
     s1a: "Abre",
     s1b: "(hace falta un plan Artist Pro de SoundCloud) y crea una app nueva con estos datos:",
-    name: "Nombre", desc: "Descripción", web: "Web", any: "cualquier web tuya", redirect: "Redirect URI",
+    name: "Nombre", desc: "Descripción", descVal: "Asistente de IA local para gestionar mis propias playlists", web: "Web", any: "cualquier web tuya", redirect: "Redirect URI",
     s1c: "SoundCloud te mostrará un Client ID y un Client Secret.",
+    terms1: "Importante: al crear la app aceptas las",
+    terms2: "condiciones de uso de la API de SoundCloud",
+    terms3: ". La sección 03 prohíbe usar el contenido obtenido por la API (incluidos títulos, etiquetas y otros textos) como entrada de cualquier tecnología de inteligencia artificial, y SoundCloud puede revocar sin aviso el acceso a la API de una app. SoundCrate envía este tipo de datos a tu asistente de IA, así que lo usas bajo tu responsabilidad.",
     s2: "2. Pega las credenciales de la app",
     save: "Guardar credenciales",
     saved: "Credenciales guardadas.",
@@ -82,6 +105,7 @@ const T = {
     errTitle: "Algo ha fallado",
     retry: "Volver a la página de configuración",
     badLink: "Este enlace de configuración no es válido o ha caducado. Pide a tu asistente que empiece la configuración de nuevo.",
+    reconnect: "Has cambiado las credenciales de la app: vuelve a conectar tu cuenta (paso 3).",
     badId: "El Client ID no parece correcto (solo letras, números, - y _).",
     badSecret: "El Client Secret no parece correcto (de 8 a 256 caracteres imprimibles, sin espacios al principio ni al final).",
     envNote: "SC_CLIENT_ID / SC_CLIENT_SECRET están definidas en el entorno del servidor y tienen prioridad.",
@@ -113,9 +137,14 @@ export async function startSetup({
   open = true,
   openFn = openBrowser,
   onSuccess = () => {},
+  onCredentialsChanged = () => {}, // al guardar credenciales de OTRA app: el servidor debe vaciar su sesión en memoria
   timeoutMs = 20 * 60 * 1000,
 } = {}) {
-  if (active) return { ...active.info, already_running: true };
+  if (active) {
+    // Página ya abierta: se reintenta abrirla (si se pide) y se devuelve el estado real, no el de la primera llamada.
+    const opened = open ? await openFn(active.info.url) : false;
+    return { ...active.info, opened, already_running: true };
+  }
 
   // Si el almacén de secretos no funciona, mejor decirlo ya (el agente explicará cómo arreglarlo).
   const pr = store.probe();
@@ -135,6 +164,7 @@ export async function startSetup({
   let finished = false;
   let resolveDone;
   const done = new Promise((r) => (resolveDone = r));
+  let timer;
 
   const send = (res, status, html, headers = {}) => {
     res.writeHead(status, {
@@ -148,8 +178,18 @@ export async function startSetup({
     res.end(html);
   };
   const redirect = (res, to) => send(res, 303, "", { Location: to });
-  const errorPage = (res, t, msg, status = 400) =>
-    send(res, status, page(t, `<h1>${esc(t.errTitle)}</h1><p class="err">${esc(msg)}</p><p><a href="/setup?k=${key}">${esc(t.retry)}</a></p>`));
+  // El enlace de vuelta lleva la clave: solo se pone cuando quien pide ya la tenía y era válida (backLink). En el
+  // resto de respuestas de error (clave mala, /callback que no autentica, 500) no se devuelve nunca.
+  const errorPage = (res, t, msg, status = 400, backLink = false) =>
+    send(res, status, page(t, `<h1>${esc(t.errTitle)}</h1><p class="err">${esc(msg)}</p>${backLink ? `<p><a href="/setup?k=${key}">${esc(t.retry)}</a></p>` : ""}`));
+  const touch = () => timer?.refresh(); // actividad con clave válida: el plazo de caducidad cuenta desde la última
+  // Refuerzo anti-CSRF del POST (ver cabecera del fichero).
+  const originOk = (req) => {
+    const o = req.headers.origin;
+    const sfs = req.headers["sec-fetch-site"];
+    if (sfs !== undefined && sfs !== "same-origin") return false;
+    return o === undefined || o === "null" || okOrigins.has(o);
+  };
 
   const hasCreds = () => {
     try {
@@ -172,9 +212,10 @@ export async function startSetup({
       t,
       `<h1>${esc(t.title)}</h1><p>${esc(t.intro)} <b>${esc(store.label)}</b>.</p>${note}
 <section><h2>${esc(t.s1)}</h2><p>${esc(t.s1a)} <a href="${lib.APPS_URL}" target="_blank" rel="noopener noreferrer">${lib.APPS_URL}</a> ${esc(t.s1b)}</p>
-<table><tr><td>${esc(t.name)}</td><td><code>SoundCrate (personal)</code></td></tr><tr><td>${esc(t.desc)}</td><td><code>SoundCrate</code></td></tr>
+<table><tr><td>${esc(t.name)}</td><td><code>SoundCrate (personal)</code></td></tr><tr><td>${esc(t.desc)}</td><td><code>${esc(t.descVal)}</code></td></tr>
 <tr><td>${esc(t.web)}</td><td>${esc(t.any)}</td></tr><tr><td>${esc(t.redirect)}</td><td><code>${esc(redirectUri)}</code></td></tr></table>
-<p class="mut">${esc(t.s1c)}</p></section>
+<p class="mut">${esc(t.s1c)}</p>
+<p><b>${esc(t.terms1)} <a href="https://developers.soundcloud.com/docs/api/terms-of-use" target="_blank" rel="noopener noreferrer">${esc(t.terms2)}</a></b>${esc(t.terms3)}</p></section>
 <section><h2>${esc(t.s2)}</h2>${
         creds
           ? `<p class="ok">✓ ${esc(t.have)}</p>${envCreds ? `<p class="mut">${esc(t.envNote)}</p>` : `<details><summary>${esc(t.change)}</summary>${form}</details>`}`
@@ -204,16 +245,17 @@ export async function startSetup({
   // Canjea el código de SoundCloud por la sesión y la guarda.
   async function complete(code, state) {
     if (!oauth || !code || !sameSecret(state, oauth.state)) throw new Error("state");
+    const o = oauth;
+    oauth = null; // el state es de un solo uso, también si el canje falla (el code tampoco se puede reutilizar)
     const { clientId, clientSecret } = credentials();
     const tok = await tokenRequest({
       grant_type: "authorization_code",
       client_id: clientId,
       client_secret: clientSecret,
       redirect_uri: redirectUri,
-      code_verifier: oauth.verifier,
+      code_verifier: o.verifier,
       code,
     });
-    oauth = null;
     if (!tok.refresh_token) throw new Error("SoundCloud did not return a refresh_token.");
     store.set("refresh_token", tok.refresh_token);
     let username = null;
@@ -246,24 +288,40 @@ export async function startSetup({
 
       if (req.method === "GET" && u.pathname === "/setup") {
         if (!sameSecret(u.searchParams.get("k"), key)) return errorPage(res, t, t.badLink, 403);
-        return send(res, 200, setupPage(t, u.searchParams.get("saved") ? `<p class="ok">✓ ${esc(t.saved)}</p>` : ""));
+        touch();
+        const note = u.searchParams.get("saved")
+          ? `<p class="ok">✓ ${esc(t.saved)}</p>${u.searchParams.get("reconnect") ? `<p class="err">${esc(t.reconnect)}</p>` : ""}`
+          : "";
+        return send(res, 200, setupPage(t, note));
       }
 
       if (req.method === "POST" && u.pathname === "/setup/credentials") {
-        if (req.headers.origin && !okOrigins.has(req.headers.origin)) return send(res, 403, "Forbidden");
+        if (!originOk(req)) return send(res, 403, "Forbidden");
         const form = new URLSearchParams(await readBody(req));
         if (!sameSecret(form.get("k"), key)) return errorPage(res, t, t.badLink, 403);
+        touch();
         const id = String(form.get("client_id") || "").trim();
         const secret = String(form.get("client_secret") || "").trim();
-        if (!/^[A-Za-z0-9_-]{8,128}$/.test(id)) return errorPage(res, t, t.badId);
-        if (!/^[\x21-\x7E](?:[\x20-\x7E]{6,254})[\x21-\x7E]$/.test(secret)) return errorPage(res, t, t.badSecret);
+        if (!/^[A-Za-z0-9_-]{8,128}$/.test(id)) return errorPage(res, t, t.badId, 400, true);
+        if (!/^[\x21-\x7E](?:[\x20-\x7E]{6,254})[\x21-\x7E]$/.test(secret)) return errorPage(res, t, t.badSecret, 400, true);
+        // Si cambia la app (otro Client ID), el refresh_token guardado era de la anterior y ya no sirve.
+        const prevId = store.get("client_id");
+        const changed = !!prevId && prevId !== id;
         store.set("client_id", id);
         store.set("client_secret", secret);
-        return redirect(res, `/setup?k=${key}&saved=1`);
+        if (changed) {
+          store.del("refresh_token");
+          oauth = null;
+          try {
+            onCredentialsChanged();
+          } catch {}
+        }
+        return redirect(res, `/setup?k=${key}&saved=1${changed ? "&reconnect=1" : ""}`);
       }
 
       if (req.method === "GET" && u.pathname === "/setup/connect") {
         if (!sameSecret(u.searchParams.get("k"), key)) return errorPage(res, t, t.badLink, 403);
+        touch();
         const { clientId } = credentials();
         const verifier = b64url(crypto.randomBytes(48));
         oauth = { verifier, state: b64url(crypto.randomBytes(18)) };
@@ -282,7 +340,7 @@ export async function startSetup({
 
       if (req.method === "GET" && u.pathname === cb.pathname) {
         const err = u.searchParams.get("error");
-        if (err) return errorPage(res, t, `SoundCloud: ${err} ${u.searchParams.get("error_description") || ""}`);
+        if (err) return errorPage(res, t, `SoundCloud: ${err} ${u.searchParams.get("error_description") || ""}`); // sin enlace: esta ruta no autentica
         try {
           const username = await complete(u.searchParams.get("code"), u.searchParams.get("state"));
           return send(res, 200, page(t, `<h1 class="ok">${esc(t.okTitle)}</h1><p>${esc(t.ok)} <b>${esc(username || "?")}</b>.</p><p>${esc(t.okBack)}</p>`));
@@ -306,7 +364,7 @@ export async function startSetup({
     );
     server.listen(port, cb.hostname.replace(/^\[|\]$/g, ""), resolve);
   });
-  const timer = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
+  timer = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
   timer.unref();
 
   const opened = open ? await openFn(url) : false;
