@@ -23,6 +23,7 @@ const deps = {
   startSetup,
   // La API no informa de Go+ (/me solo lista planes de artista): el usuario lo declara con SC_GO_PLUS=1.
   goPlus: /^(1|true|yes|si|sí)$/i.test(process.env.SC_GO_PLUS || ""),
+  restoreRetryMs: 1000, // espera antes de reintentar una restauración de playlist que falló
 };
 export function _setDeps(d) {
   Object.assign(deps, d);
@@ -105,8 +106,26 @@ async function sc(path, { method = "GET", body, retry = true } = {}) {
 const coll = (b) => (b && Array.isArray(b.collection) ? b.collection : Array.isArray(b) ? b : []);
 const mmss = (ms) => (ms ? `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}` : null);
 // Acepta "123" o una URN ("soundcloud:tracks:123"). La API está migrando de id numérico a URN.
-const idOf = (x) => String(x ?? "").trim().match(/^(?:soundcloud:[a-z-]+:)?(\d+)$/)?.[1] ?? null;
-const ids = (arr) => (arr || []).map(idOf).filter(Boolean);
+// Con `kind` ("tracks", "playlists", "users") una URN de otro tipo es un error, no un id válido (soundcloud:users:7 no es la pista 7).
+const idOf = (x, kind) => {
+  const m = String(x ?? "").trim().match(/^(?:soundcloud:([a-z-]+):)?(\d+)$/);
+  if (!m) return null;
+  const sing = (k) => k.replace(/s$/, "");
+  if (kind && m[1] && sing(m[1]) !== sing(kind)) {
+    throw new Error(`${String(x).trim()} is a ${sing(m[1])} URN, not a ${sing(kind)}. Nothing was changed.`);
+  }
+  return m[2];
+};
+// Acepta un array, una cadena separada por comas ("1,2"), un array en JSON ('["1","2"]') o un id suelto.
+const ids = (arr, kind = "tracks") => {
+  if (typeof arr === "string" && arr.trim().startsWith("[")) {
+    try {
+      const j = JSON.parse(arr);
+      if (Array.isArray(j)) arr = j;
+    } catch {}
+  }
+  return list(arr).map((x) => idOf(x, kind)).filter(Boolean);
+};
 const rid = (o) => (o?.id != null ? String(o.id) : idOf(o?.urn) ?? o?.urn ?? null);
 const releaseDate = (t) =>
   t.release_year ? [t.release_year, t.release_month, t.release_day].filter(Boolean).map((n, i) => (i ? String(n).padStart(2, "0") : n)).join("-") : null;
@@ -258,7 +277,7 @@ async function resolveId(kind, idValue, url) {
     if (o?.kind !== kind) throw new Error(`That URL is a ${o?.kind || "unknown resource"}, not a ${kind}.`);
     return { id: rid(o), obj: o };
   }
-  const id = idOf(idValue);
+  const id = idOf(idValue, kind);
   if (!id) throw new Error(`Provide a numeric ${kind}_id or a url.`);
   return { id, obj: null };
 }
@@ -281,10 +300,75 @@ function assertComplete(p, hidden) {
   }
 }
 
-async function playlistTrackIds(id) {
-  const { p, tracks, hidden } = await getPlaylistFull(id);
-  assertComplete(p, hidden);
-  return { p, ids: tracks.map(rid) };
+// Comparaciones de listas de ids teniendo en cuenta las repeticiones (una playlist puede repetir pistas).
+const countOf = (a, x) => a.reduce((n, y) => n + (y === x ? 1 : 0), 0);
+const sameMulti = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
+const sameSeq = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+// Entradas de `want` que `got` no cubre (multiconjunto).
+const missingFrom = (want, got) => {
+  const left = [...got];
+  return want.filter((x) => {
+    const i = left.indexOf(x);
+    if (i < 0) return true;
+    left.splice(i, 1);
+    return false;
+  });
+};
+
+// Lectura para leer-modificar-escribir: lee dos veces y solo da por buena la segunda si coincide con la primera.
+// Así el cambio se calcula sobre un estado recién leído y la ventana hasta el PUT es mínima. No es atómico:
+// SoundCloud no ofrece escritura condicional, así que una edición simultánea desde otra sesión o desde la web
+// justo entre esta lectura y el PUT se seguiría perdiendo.
+async function stableRead(pid, tries = 3) {
+  for (let i = 0; i < tries; i++) {
+    const a = await getPlaylistFull(pid);
+    assertComplete(a.p, a.hidden);
+    const b = await getPlaylistFull(pid);
+    assertComplete(b.p, b.hidden);
+    const idsB = b.tracks.map(rid);
+    if (sameSeq(a.tracks.map(rid), idsB)) return { p: b.p, tracks: b.tracks, ids: idsB };
+  }
+  throw new Error(
+    "The playlist keeps changing while it is being read (another SoundCrate session or the SoundCloud web or app is editing it), so nothing was changed. Try again in a moment."
+  );
+}
+
+// No fiarse solo de la respuesta del PUT: puede omitir pistas (p. ej. blocked). Si no coincide con lo esperado,
+// se relee la playlist con access=...blocked y se decide con esa lectura.
+async function confirmWrite(pid, resp, expected) {
+  const got = (resp?.tracks || []).map(rid);
+  if (sameMulti(got, expected)) return { ids: got, p: resp };
+  try {
+    const re = await getPlaylistFull(pid);
+    return { ids: re.tracks.map(rid), p: re.p };
+  } catch {
+    return { ids: got, p: resp };
+  }
+}
+
+// Una escritura dejó la playlist sin pistas que tenía: reescribe la lista anterior, comprueba el resultado y
+// lanza un error que dice siempre qué pasó. Si no consigue restaurarla, el error incluye la lista original.
+async function failAndRestore(pid, original, reason, lastAfter) {
+  let now = lastAfter;
+  let err = null;
+  for (let i = 0; i < 2; i++) {
+    if (i) await new Promise((r) => setTimeout(r, deps.restoreRetryMs));
+    try {
+      const resp = await putTracks(pid, original);
+      now = (await confirmWrite(pid, resp, original)).ids;
+      err = null;
+      break;
+    } catch (e) {
+      err = e;
+    }
+  }
+  if (!err && sameMulti(now, original)) throw new Error(`${reason} The previous track list was restored.`);
+  const missing = [...new Set(missingFrom(original, now))];
+  throw new Error(
+    `${reason} Restoring the previous track list FAILED (${err ? err.message : "SoundCloud still does not return the same tracks"}). ` +
+      `Check the playlist on SoundCloud now. Original track ids, in order: ${original.join(",")}. ` +
+      `Missing now: ${missing.length ? missing.join(",") : "unknown"}. Re-add the missing tracks; do not retry the same call blindly.`
+  );
 }
 
 // Cerrojo por playlist: las operaciones leer-modificar-escribir sobre la misma playlist van en serie.
@@ -302,7 +386,7 @@ function withPlaylistLock(pid, fn) {
 }
 
 function playlistId(x) {
-  const pid = ids([x])[0];
+  const pid = idOf(x, "playlists");
   if (!pid) throw new Error("Provide a numeric playlist_id.");
   return pid;
 }
@@ -310,7 +394,8 @@ function playlistId(x) {
 // Escribe la lista completa y, opcionalmente, campos de la playlist (título, descripción, género, etiquetas).
 async function writePlaylist(id, list, fields = {}) {
   // Los IDs van como cadenas: SoundCloud rechaza IDs > 2^31 enviados como número.
-  return sc(`/playlists/${id}`, { method: "PUT", body: { playlist: { ...fields, tracks: list.map((x) => ({ id: x })) } } });
+  // access=...blocked: sin él la respuesta puede omitir pistas blocked (valor por defecto: playable,preview).
+  return sc(`/playlists/${id}?${ALL_ACCESS}`, { method: "PUT", body: { playlist: { ...fields, tracks: list.map((x) => ({ id: x })) } } });
 }
 const putTracks = (id, list) => writePlaylist(id, list);
 
@@ -843,6 +928,8 @@ const TOOLS = {
       required: ["title"],
     },
     run: async ({ title, description, track_ids, public: pub = false }) => {
+      const wanted = [...new Set(ids(track_ids))];
+      if (list(track_ids).length && !wanted.length) throw new Error("track_ids must be an array of numeric track ids. Nothing was created.");
       const p = await sc(`/playlists`, {
         method: "POST",
         body: {
@@ -850,7 +937,7 @@ const TOOLS = {
             title,
             sharing: pub ? "public" : "private",
             ...(description ? { description } : {}),
-            tracks: ids(track_ids).map((id) => ({ id })),
+            tracks: wanted.map((id) => ({ id })),
           },
         },
       });
@@ -867,11 +954,18 @@ const TOOLS = {
     run: async ({ playlist_id, track_ids }) => {
       const pid = playlistId(playlist_id);
       return withPlaylistLock(pid, async () => {
-        const { ids: cur } = await playlistTrackIds(pid);
-        const add = [...new Set(ids(track_ids))].filter((x) => !cur.includes(x));
+        const wanted = [...new Set(ids(track_ids))];
+        if (list(track_ids).length && !wanted.length) throw new Error("track_ids must be an array of numeric track ids. Nothing was changed.");
+        const { ids: cur } = await stableRead(pid);
+        const add = wanted.filter((x) => !cur.includes(x));
         if (!add.length) return { added: 0, total: cur.length, note: "Nothing new to add." };
-        const p = await putTracks(pid, [...cur, ...add]);
-        const after = (p?.tracks || []).map(rid);
+        const next = [...cur, ...add];
+        const p = await putTracks(pid, next);
+        const { ids: after } = await confirmWrite(pid, p, next);
+        const lost = missingFrom(cur, after);
+        if (lost.length) {
+          await failAndRestore(pid, cur, `After adding tracks, SoundCloud no longer returned ${lost.length} track(s) that were already in the playlist (${[...new Set(lost)].join(",")}).`, after);
+        }
         return {
           added: add.filter((x) => after.includes(x)).length,
           not_accepted: add.filter((x) => !after.includes(x)),
@@ -881,26 +975,38 @@ const TOOLS = {
     },
   },
   remove_tracks_from_playlist: {
-    description: "Remove one or more tracks from a playlist in a single write. Keeps the order of the rest.",
+    description:
+      "Remove one or more tracks from a playlist in a single write. Keeps the order of the rest. If a track appears more than once in the playlist, nothing is changed unless all_copies is true (then every copy is removed); to remove a single copy use remove_track_from_playlist with position.",
     inputSchema: {
       type: "object",
-      properties: { playlist_id: { type: "string" }, track_ids: { type: "array", items: { type: "string" } } },
+      properties: {
+        playlist_id: { type: "string" },
+        track_ids: { type: "array", items: { type: "string" } },
+        all_copies: { type: "boolean", description: "Remove every copy of a track that appears more than once. Default false" },
+      },
       required: ["playlist_id", "track_ids"],
     },
-    run: async ({ playlist_id, track_ids }) => removeTracks(playlist_id, track_ids),
+    run: async ({ playlist_id, track_ids, all_copies }) => removeTracks(playlist_id, track_ids, { allCopies: all_copies === true }),
   },
   remove_track_from_playlist: {
-    description: "Remove one track from a playlist. For several, use remove_tracks_from_playlist.",
+    description:
+      "Remove one track from a playlist. For several, use remove_tracks_from_playlist. If the track appears more than once, nothing is changed unless you pass position (1-based, removes only that copy) or all_copies true (removes every copy).",
     inputSchema: {
       type: "object",
-      properties: { playlist_id: { type: "string" }, track_id: { type: "string" } },
+      properties: {
+        playlist_id: { type: "string" },
+        track_id: { type: "string" },
+        position: { type: "integer", minimum: 1, description: "1-based position of the single copy to remove" },
+        all_copies: { type: "boolean", description: "Remove every copy. Default false" },
+      },
       required: ["playlist_id", "track_id"],
     },
-    run: async ({ playlist_id, track_id }) => removeTracks(playlist_id, [track_id]),
+    run: async ({ playlist_id, track_id, position, all_copies }) =>
+      removeTracks(playlist_id, [track_id], { position, allCopies: all_copies === true }),
   },
   replace_track_in_playlist: {
     description:
-      "Replace a track with another at the same position (e.g. a user upload with the official release). If the new track was already elsewhere in the playlist, it is removed there to avoid duplicates.",
+      "Replace a track with another at the same position (e.g. a user upload with the official release). The first copy of old_track_id is replaced; any other copy of old_track_id, and any existing copy of new_track_id elsewhere, is removed so the playlist keeps one copy of the new track (they are listed in removed_elsewhere). If SoundCloud does not accept the new track, the previous list is restored and an error is returned.",
     inputSchema: {
       type: "object",
       properties: {
@@ -912,21 +1018,30 @@ const TOOLS = {
     },
     run: async ({ playlist_id, old_track_id, new_track_id }) => {
       const pid = playlistId(playlist_id);
-      const [oldId] = ids([old_track_id]);
-      const [newId] = ids([new_track_id]);
+      const oldId = idOf(old_track_id, "tracks");
+      const newId = idOf(new_track_id, "tracks");
       if (!oldId || !newId) throw new Error("Provide numeric old_track_id and new_track_id.");
       if (oldId === newId) throw new Error("old_track_id and new_track_id are the same track.");
       return withPlaylistLock(pid, async () => {
-        const { ids: cur } = await playlistTrackIds(pid);
+        const { ids: cur } = await stableRead(pid);
         const pos = cur.indexOf(oldId);
         if (pos < 0) throw new Error(`Track ${oldId} is not in the playlist; nothing was changed.`);
+        const removedElsewhere = cur.flatMap((x, i) => (i !== pos && (x === oldId || x === newId) ? [{ id: x, position: i + 1 }] : []));
         const next = cur.flatMap((x, i) => (i === pos ? [newId] : x === oldId || x === newId ? [] : [x]));
         const p = await putTracks(pid, next);
-        const after = (p?.tracks || []).map(rid);
+        const { ids: after } = await confirmWrite(pid, p, next);
+        if (!after.includes(newId)) {
+          await failAndRestore(pid, cur, `SoundCloud did not accept track ${newId} (it may be unavailable, private or blocked), so ${oldId} was not replaced.`, after);
+        }
+        const lost = missingFrom(next, after);
+        if (lost.length) {
+          await failAndRestore(pid, cur, `After replacing, SoundCloud no longer returned ${lost.length} track(s) of the playlist (${[...new Set(lost)].join(",")}).`, after);
+        }
         return {
-          replaced: after.includes(newId) && !after.includes(oldId),
+          replaced: !after.includes(oldId),
           position: pos + 1,
-          ...(after.includes(newId) ? {} : { not_accepted: [newId] }),
+          ...(removedElsewhere.length ? { removed_elsewhere: removedElsewhere } : {}),
+          total_before: cur.length,
           total: after.length,
         };
       });
@@ -1025,7 +1140,7 @@ const TOOLS = {
       required: ["track_id"],
     },
     run: async ({ track_id, limit }) => {
-      const id = idOf(track_id);
+      const id = idOf(track_id, "tracks");
       if (!id) throw new Error("Provide a numeric track_id.");
       const o = await sc(`/tracks/${id}`);
       const artist = o.metadata_artist || o.user?.username || "";
@@ -1117,47 +1232,74 @@ const TOOLS = {
       if (a.sort_by && a.track_order) throw new Error("Use sort_by or track_order, not both.");
       if (!Object.keys(meta).length && !a.sort_by && !a.track_order) throw new Error("Nothing to change.");
       return withPlaylistLock(pid, async () => {
-        const { p, tracks, hidden } = await getPlaylistFull(pid);
-        assertComplete(p, hidden);
-        const before = tracks.map(rid);
+        const { tracks, ids: before } = await stableRead(pid);
         let next = before;
         if (a.track_order) {
           const wanted = ids(list(a.track_order));
-          const same =
-            wanted.length === before.length && new Set(wanted).size === wanted.length && before.every((x) => wanted.includes(x));
-          if (!same) throw new Error(`track_order must contain exactly the ${before.length} current tracks, once each. Nothing was changed.`);
+          if (!sameMulti(wanted, before)) {
+            throw new Error(`track_order must contain exactly the ${before.length} current tracks, with the same repetitions as the playlist. Nothing was changed.`);
+          }
           next = wanted;
         } else if (a.sort_by) {
           next = sortIds(tracks, a.sort_by, a.direction);
         }
         const reordered = next.some((x, i) => x !== before[i]);
         const p2 = await writePlaylist(pid, next, meta);
-        const after = (p2?.tracks || []).map(rid);
-        const sameSet = after.length === before.length && before.every((x) => after.includes(x));
-        if (!sameSet) {
-          await writePlaylist(pid, before);
-          throw new Error("SoundCloud did not return the same set of tracks after writing; the previous order was restored. Check the playlist on SoundCloud.");
+        const { ids: after, p: pFinal } = await confirmWrite(pid, p2, next);
+        if (!sameMulti(after, before)) {
+          await failAndRestore(
+            pid,
+            before,
+            "SoundCloud did not return the same set of tracks after writing." +
+              (Object.keys(meta).length ? ` The requested changes to ${Object.keys(meta).join(", ")} were applied and not reverted.` : ""),
+            after
+          );
         }
-        return { ...slimPlaylist(p2), changed: [...Object.keys(meta), ...(reordered ? ["order"] : [])], reordered, total: after.length };
+        return { ...slimPlaylist(pFinal), changed: [...Object.keys(meta), ...(reordered ? ["order"] : [])], reordered, total: after.length };
       });
     },
   },
 };
 
-async function removeTracks(playlist_id, track_ids) {
+async function removeTracks(playlist_id, track_ids, { position, allCopies = false } = {}) {
   const pid = playlistId(playlist_id);
   const drop = new Set(ids(track_ids));
   if (!drop.size) throw new Error("Provide at least one numeric track_id.");
+  if (position != null && (!Number.isInteger(Number(position)) || Number(position) < 1)) throw new Error("position must be a whole number, 1 or more.");
+  if (position != null && drop.size !== 1) throw new Error("position only works with a single track.");
   return withPlaylistLock(pid, async () => {
-    const { ids: cur } = await playlistTrackIds(pid);
+    const { ids: cur } = await stableRead(pid);
     const found = [...drop].filter((x) => cur.includes(x));
     const not_found = [...drop].filter((x) => !cur.includes(x));
     if (!found.length) return { removed: 0, not_found, total: cur.length, note: "None of those tracks were in the playlist." };
-    const p = await putTracks(pid, cur.filter((x) => !drop.has(x)));
-    const after = (p?.tracks || []).map(rid);
-    const still = found.filter((x) => after.includes(x));
+    let next;
+    if (position != null) {
+      const at = Number(position) - 1;
+      if (cur[at] !== found[0]) {
+        throw new Error(`Position ${position} holds ${cur[at] ? `track ${cur[at]}` : "no track"}, not track ${[...drop][0]}. Nothing was changed.`);
+      }
+      next = cur.filter((_, i) => i !== at);
+    } else {
+      const repeated = found.filter((x) => countOf(cur, x) > 1);
+      if (repeated.length && !allCopies) {
+        const where = repeated.map((x) => `${x} at positions ${cur.flatMap((y, i) => (y === x ? [i + 1] : [])).join(", ")}`).join("; ");
+        throw new Error(
+          `Track ${where}: it appears more than once. Nothing was changed. Use remove_track_from_playlist with position to remove one copy, or all_copies true to remove every copy.`
+        );
+      }
+      next = cur.filter((x) => !drop.has(x));
+    }
+    const p = await putTracks(pid, next);
+    const { ids: after } = await confirmWrite(pid, p, next);
+    const surplus = (x) => Math.max(0, countOf(after, x) - countOf(next, x));
+    const lost = missingFrom(next, after);
+    if (lost.length) {
+      await failAndRestore(pid, cur, `After removing, SoundCloud no longer returned ${lost.length} track(s) that should have stayed (${[...new Set(lost)].join(",")}).`, after);
+    }
+    const still = found.filter((x) => surplus(x) > 0);
+    const notRemovedEntries = still.reduce((n, x) => n + surplus(x), 0);
     return {
-      removed: found.length - still.length,
+      removed: cur.length - next.length - notRemovedEntries,
       ...(not_found.length ? { not_found } : {}),
       ...(still.length ? { not_removed: still } : {}),
       total: after.length,
