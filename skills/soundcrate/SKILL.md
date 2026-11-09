@@ -60,8 +60,9 @@ Tell the user, in plain language, how to get them:
 
 ## Safety
 
-- New playlists are private unless the user asks for public (a `public` value that is not a clear true, such as
-  `"false"`, stays private).
+- New playlists are private unless the user asks for public. `public` accepts true or false, also as text:
+  only `true`, `"true"`, `"1"`, `"yes"` or `"sí"` make it public; `false`, `"false"`, `"0"`, `"no"`, empty or
+  omitted keep it private; any other value (for example `"maybe"`) is rejected with an error and nothing is created.
 - Before removing, replacing or reordering tracks in an existing playlist, tell the user what will change and get
   a clear yes. SoundCrate cannot delete playlists.
 - Removing a track that appears more than once needs `position` or `all_copies`. `replace_track_in_playlist`
