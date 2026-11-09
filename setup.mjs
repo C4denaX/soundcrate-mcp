@@ -78,6 +78,7 @@ const T = {
     okBack: "You can close this tab and go back to your assistant.",
     errTitle: "Something went wrong",
     retry: "Back to the setup page",
+    cbHintCreds: "Go back to the setup tab and complete step 2 (the app credentials), then connect again in step 3.",
     cbHint: "Go back to the setup tab and try step 3 again, or ask your assistant to open the setup page again.",
     openUntil: "This page stays open until",
     openUntil2: "; any step you take here extends it.",
@@ -112,6 +113,7 @@ const T = {
     okBack: "Ya puedes cerrar esta pestaña y volver a tu asistente.",
     errTitle: "Algo ha fallado",
     retry: "Volver a la página de configuración",
+    cbHintCreds: "Vuelve a la pestaña de configuración y completa el paso 2 (las credenciales de la app); después conecta de nuevo en el paso 3.",
     cbHint: "Vuelve a la pestaña de configuración y repite el paso 3, o pide a tu asistente que abra de nuevo la página de configuración.",
     openUntil: "Esta página sigue abierta hasta las",
     openUntil2: "; cualquier paso que des aquí amplía el plazo.",
@@ -201,7 +203,7 @@ export async function startSetup({
   // resto de respuestas de error (clave mala, /callback que no autentica, 500) no se devuelve nunca.
   // Sin backLink se ofrece una salida SIN clave (texto: volver a la pestaña de configuración o pedir otra página).
   const errorPage = (res, t, msg, status = 400, backLink = false, hint = false) =>
-    send(res, status, page(t, `<h1>${esc(t.errTitle)}</h1><p class="err">${esc(msg)}</p>${backLink ? `<p><a href="/setup?k=${key}">${esc(t.retry)}</a></p>` : ""}${hint ? `<p>${esc(t.cbHint)}</p>` : ""}`));
+    send(res, status, page(t, `<h1>${esc(t.errTitle)}</h1><p class="err">${esc(msg)}</p>${backLink ? `<p><a href="/setup?k=${key}">${esc(t.retry)}</a></p>` : ""}${hint ? `<p>${esc(hint === "creds" ? t.cbHintCreds : t.cbHint)}</p>` : ""}`));
   const touch = () => {
     // actividad con clave válida: el plazo de caducidad cuenta desde la última
     deadline = Date.now() + timeoutMs;
@@ -278,7 +280,7 @@ export async function startSetup({
   // endpoint (solo el estado HTTP). completeFromUrl (terminal del usuario) pide el detalle completo.
   async function complete(code, state, { brief = false } = {}) {
     if (!oauth && lastFail && code && sameSecret(state, lastFail.state)) {
-      const http = /\b([1-5]\d\d)\b/.exec(lastFail.message)?.[1];
+      const http = /\/oauth\/token ([1-5]\d\d)\b/.exec(lastFail.message)?.[1];
       const why = !brief ? lastFail.message : http ? `HTTP ${http}` : null;
       const e = new Error(
         why
@@ -291,7 +293,13 @@ export async function startSetup({
     if (!oauth || !code || !sameSecret(state, oauth.state)) throw new Error("state");
     // Sin credenciales no hay canje: se dice la causa real, no se registra como canje fallido y el state NO se
     // consume (el code no llegó a enviarse a SoundCloud, así que sigue siendo válido al guardar las credenciales).
-    const { clientId, clientSecret } = credentials();
+    let clientId, clientSecret;
+    try {
+      ({ clientId, clientSecret } = credentials());
+    } catch (e) {
+      e.code = "no_credentials";
+      throw e;
+    }
     const o = oauth;
     oauth = null; // el state es de un solo uso, también si el canje falla (el code tampoco se puede reutilizar)
     lastFail = null;
@@ -400,7 +408,7 @@ export async function startSetup({
           const username = await complete(u.searchParams.get("code"), u.searchParams.get("state"), { brief: true });
           return send(res, 200, page(t, `<h1 class="ok">${esc(t.okTitle)}</h1><p>${esc(t.ok)} <b>${esc(username || "?")}</b>.</p><p>${esc(t.okBack)}</p>`));
         } catch (e) {
-          return errorPage(res, t, e.message === "state" ? t.badState : e.message, 400, false, true);
+          return errorPage(res, t, e.message === "state" ? t.badState : e.message, 400, false, e.code === "no_credentials" ? "creds" : true);
         }
       }
       return send(res, 404, "Not found");

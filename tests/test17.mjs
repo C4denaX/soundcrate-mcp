@@ -88,6 +88,33 @@ test("state inválido en /callback: una sola indicación (no badLink + cbHint), 
   } finally { t.s.close(); await t.s.done; }
 });
 
+test("callback repetido: mensajes con números de 3 cifras que no son estado HTTP dan el texto genérico", async () => {
+  for (const msg of ["connect ETIMEDOUT 104.18.1.1:443", "Unexpected token '<' ... at position 120"]) {
+    const t = await boot({ tokenRequest: async () => { throw new Error(msg); } });
+    try {
+      const url = `${t.base}/callback?code=C&state=${await connect(t)}`;
+      await fetch(url);
+      const again = txt(await (await fetch(url)).text());
+      assert.match(again, /the exchange already failed; connect again from step 3/, again);
+      assert.doesNotMatch(again, /HTTP \d/);
+    } finally { t.s.close(); await t.s.done; }
+  }
+});
+
+test("callback sin credenciales: la pista manda al paso 2 (en y es), sin la clave", async () => {
+  let creds = { clientId: "abcdefgh123", clientSecret: "secret-12345" };
+  const t = await boot({ credentials: () => { if (!creds) throw new Error("SoundCrate is not set up yet: the app credentials are missing."); return creds; } });
+  try {
+    const st = await connect(t);
+    creds = null;
+    for (const [lang, re] of [["en", /complete step 2/], ["es", /completa el paso 2/]]) {
+      const h = await (await fetch(`${t.base}/callback?code=C&state=${st}`, { headers: { "accept-language": lang } })).text();
+      assert.match(txt(h), /not set up yet/); assert.match(txt(h), re);
+      assert.doesNotMatch(txt(h), /try step 3 again|repite el paso 3/); assert.ok(!h.includes(t.k));
+    }
+  } finally { t.s.close(); await t.s.done; }
+});
+
 const failed = [];
 for (const [name, fn] of cases) {
   try { await fn(); console.log("ok   ", name); } catch (e) { failed.push(name); console.log("FAIL ", name, "\n     ", String(e.message).split("\n")[0]); }
