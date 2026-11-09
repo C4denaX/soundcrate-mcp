@@ -2,7 +2,7 @@
   "name": "soundcrate",
   "displayName": "SoundCrate",
   "version": "1.7.0",
-  "description": "Dig, curate and reorder your SoundCloud playlists: search by genre, BPM, key or date, find related tracks and artists, build private playlists and order them by BPM or Camelot key. Runs locally; guided setup.",
+  "description": "Dig, curate and reorder your SoundCloud playlists: search by genre, BPM or upload date, find related tracks and artists, build private playlists and order them by BPM or Camelot key. Runs locally; guided setup.",
   "author": {
     "name": "Sergio Ruiz",
     "url": "https://github.com/C4denaX"
@@ -19,7 +19,7 @@
     "go_plus": {
       "type": "boolean",
       "title": "I have SoundCloud Go+",
-      "description": "Turn on if your SoundCloud account has Go+, so SoundCrate treats Go+ catalogue tracks as playable in full. SoundCloud does not report this, so you have to tell it.",
+      "description": "Turn on if your SoundCloud account has Go+, so SoundCrate treats Go+ catalogue tracks as playable in full (label tracks usually are, with no guarantee for your region or rights). SoundCloud does not report this, so you have to tell it.",
       "default": false
     }
   }
