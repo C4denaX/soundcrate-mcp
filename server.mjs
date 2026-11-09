@@ -1705,9 +1705,11 @@ function coerceArg(name, v, sch) {
       }
       if (!Array.isArray(arr)) return bad("a list (an array, or text like \"1,2\")");
       const it = sch.items || {};
-      // Una lista que solo trae nulos no dice nada: error claro en vez de seguir como si fuera una lista vacía.
-      if (arr.length && arr.every((x) => x === null || x === undefined)) {
-        throw new Error(`Argument "${name}": the list only has empty (null) entries; give at least one value, or leave it out.`);
+      // Campos de ids (track_ids, track_order, seed_track_ids…): una lista que solo trae nulos o entradas en blanco no dice
+      // nada, y seguir como si fuera vacía crearía una playlist vacía o gastaría peticiones: error claro. En el resto de listas
+      // (filtros como genres o tags) una lista vacía o de nulos equivale a omitir el campo.
+      if (/(_ids|^track_order)$/.test(name) && arr.length && arr.every((x) => x == null || (typeof x === "string" && !x.trim()))) {
+        throw new Error(`Argument "${name}": the list only has empty entries (null or blank); give at least one id, or leave it out.`);
       }
       return arr.flatMap((x, i) => {
         if (x === null || x === undefined) return []; // los nulos se descartan; "item N" cuenta la posición original

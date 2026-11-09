@@ -23,6 +23,7 @@ S._setDeps({
       const tracks = m === "PUT" ? body.tracks.map((t) => tk(t.id)) : [1, 2, 3].map(tk);
       return Response.json({ id: 10, title: "pl", sharing: "private", permalink_url: "u", track_count: tracks.length, tracks });
     }
+    if (m === "GET" && /^\/tracks(\/\d+(\/related)?)?$/.test(u.pathname)) return Response.json(/\/tracks\/\d+$/.test(u.pathname) ? tk(u.pathname.split("/").pop()) : { collection: [] });
     return new Response("nf", { status: 404 });
   },
 });
@@ -127,6 +128,42 @@ await tcase("los nulos mezclados con ids siguen descartándose (add [null,\"4\"]
   const r = await call("add_tracks_to_playlist", { playlist_id: "10", track_ids: [null, "4"] });
   assert.equal(r.err, false, r.text);
   assert.deepEqual(r.log.find((l) => l.m === "PUT").body.tracks.map((t) => t.id), ["1", "2", "3", "4"]);
+});
+
+await tcase("filtros de lista (genres, tags) con [null] o [] equivalen a omitirlos: sin «Invalid arguments»", async () => {
+  for (const [tool, extra] of [["search_tracks", { query: "x" }], ["suggest_tracks", { seed_track_ids: ["1"] }]]) {
+    for (const f of tool === "search_tracks" ? ["genres", "tags"] : ["genres"]) {
+      for (const v of [[null], [null, null], []]) {
+        const r = await call(tool, { ...extra, [f]: v });
+        assert.doesNotMatch(r.text, /Invalid arguments|empty entries/, `${tool} ${f}:${JSON.stringify(v)} -> ${r.text.slice(0, 120)}`);
+        assert.equal(r.err, false, `${tool} ${f}: ${r.text.slice(0, 120)}`);
+      }
+    }
+  }
+});
+
+await tcase("campos de ids: [null] sigue dando error; seed_track_ids:[null] también", async () => {
+  for (const [tool, args] of [
+    ["create_playlist", { title: "n", track_ids: [null] }],
+    ["add_tracks_to_playlist", { playlist_id: "10", track_ids: [null] }],
+    ["suggest_tracks", { seed_track_ids: [null] }],
+  ]) {
+    const r = await call(tool, args);
+    assert.equal(r.err, true, tool);
+    noNet(r, tool);
+  }
+});
+
+await tcase("create_playlist con track_ids solo en blanco ([\"\"], [\"\", \" \"], [null,\"\"]) da error claro y no crea nada; track_ids:\"\" cuenta como omitido", async () => {
+  for (const track_ids of [[""], ["", " "], [null, ""]]) {
+    const r = await call("create_playlist", { title: "n", track_ids });
+    assert.equal(r.err, true, JSON.stringify(track_ids));
+    assert.match(r.text, /track_ids.*only has empty/);
+    noNet(r, "create " + JSON.stringify(track_ids));
+  }
+  const r = await call("create_playlist", { title: "n", track_ids: "" });
+  assert.equal(r.err, false, r.text);
+  assert.equal(r.n("POST"), 1);
 });
 
 if (fails.length) {
