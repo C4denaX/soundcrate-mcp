@@ -29,8 +29,10 @@ Tell the user, in plain language, how to get them:
   Section 03 forbids using content obtained through the API as input to AI technology, and SoundCloud can revoke
   the app's access without notice. Mention it when guiding the setup: the user uses SoundCrate at their own
   responsibility.
-- The setup page expires after 20 minutes without activity (`setup_status` reports `setup_page_expired`): call
-  `start_setup` again. If the user changes the Client ID, they must connect again (step 3 of the page).
+- The setup page expires 60 minutes after the user's last action on it (the page shows until what time it stays open;
+  `setup_status` reports `setup_page_expired`): call `start_setup` again. After an error on /callback the page tells
+  the user to go back to the setup tab or ask for a new page. `opened` in the result is only a hint: always give
+  the user the URL. If the user changes the Client ID, they must connect again (step 3 of the page).
 - After setup, ask whether they have SoundCloud Go+ and, if so, how to declare it, depending on how SoundCrate
   was installed: extension (Claude Desktop) > Settings > Extensions > SoundCrate, switch "I have SoundCloud Go+"
   (do not edit claude_desktop_config.json); plugin (Claude Code) > `/plugin`, soundcrate, option `go_plus` (do
@@ -44,8 +46,8 @@ Tell the user, in plain language, how to get them:
 - `search_tracks` filters by text, genres, tags, BPM, duration and upload date. It cannot filter by key or by
   release date; filter those yourself from each result's `camelot` and release date.
 - `listen` says what the user can actually hear: `full`, `go_plus`, `go_plus_probable` or `restricted`. With Go+
-  declared, use `only_listenable: true` to keep only tracks they can play in full. `go_plus_probable` (label
-  tracks) usually plays in full with Go+, with no guarantee (region, rights). Every track can be added to a
+  declared, `only_listenable: true` keeps `full` and `go_plus` tracks (sure) and also `go_plus_probable` (label tracks:
+  probable, not certain; region and rights may stop it). Every track can be added to a
   playlist.
 - `get_playlist` is paged: `limit` (default 100, max 200), `offset`, `compact`; it returns `total` and
   `next_offset`. Cursors (`next_cursor`) only work with the tool that returned them.
@@ -54,17 +56,24 @@ Tell the user, in plain language, how to get them:
 - To grow a playlist: pick 2-5 seed tracks, call `suggest_tracks` with `exclude_playlist_id`, then show the
   candidates before adding anything.
 - To plan a set: `analyze_playlist` shows BPM jumps and key clashes; `update_playlist` with `sort_by: "bpm"` or
-  `"camelot"` reorders it. `camelot` goes in zigzag, 1A 1B 2B 2A 3A 3B 4B 4A… (A first on odd numbers, B first
-  on even ones), so each step between neighbouring numbers keeps the letter.
+  `"camelot"` reorders it. `camelot` keeps the numbers in order (asc or desc); inside a number with both letters it starts with
+  the one that mixes with the previous track, choosing the combination with fewest clashes (never more than plain
+  1A 1B 2A 2B), zigzag 1A 1B 2B 2A… on a tie; tracks without a key go last; a number missing from the playlist is
+  still an unavoidable clash. `update_playlist` metadata changes (title, etc.) are not reverted if the track list
+  is restored.
 - To find a user's own playlist by name, use `get_my_playlists` with `query` (it includes private playlists).
 
 ## Safety
 
-- New playlists are private unless the user asks for public. `public` accepts true or false, also as text:
-  only `true`, `"true"`, `"1"`, `"yes"` or `"sí"` make it public; `false`, `"false"`, `"0"`, `"no"`, empty or
-  omitted keep it private; any other value (for example `"maybe"`) is rejected with an error and nothing is created.
+- New playlists are private unless the user asks for public. `public` accepts true or false, also as text or 1/0:
+  `true`, `1`, or the text true/1/yes/si/sí (any capitals, spaces around are ignored, e.g. `" YES "`) make it
+  public; `false`, `0`, or the text false/0/no keep it private, as does leaving it out, null or empty text; anything else (for
+  example `"maybe"`) is rejected with an error and nothing is created.
 - Before removing, replacing or reordering tracks in an existing playlist, tell the user what will change and get
   a clear yes. SoundCrate cannot delete playlists.
-- Removing a track that appears more than once needs `position` or `all_copies`. `replace_track_in_playlist`
+- Removing a track that appears more than once needs `position` or `all_copies` (not both). Entries of `track_ids`
+  that are not track ids are skipped and listed in `ignored_ids` (create, add, remove). `tags` accepts a list.
+  A write costs 1 GET + 1 PUT (one more GET only if the PUT reply doesn't match); if the re-read fails the error
+  says the change was sent but not confirmed and nothing was restored. `replace_track_in_playlist`
   lists the other copies it removed in `removed_elsewhere`; if a write loses tracks the playlist is restored.
 - Writes are not atomic: do not edit the same playlist at once from two sessions or the SoundCloud website.

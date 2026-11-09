@@ -40,7 +40,7 @@ Funciona en tu ordenador, guarda tus credenciales en el almacén seguro de tu si
 > inteligencia artificial, y SoundCloud puede revocar sin aviso el acceso a la API de una app. SoundCrate envía
 > este tipo de datos a tu asistente de IA, así que lo usas bajo tu responsabilidad. La página de configuración
 > muestra este aviso en el paso 1 y propone como descripción de la app *Local AI assistant to manage my own
-> playlists*; describe tu app con honestidad.
+> playlists* (en español, *Asistente de IA local para gestionar mis propias playlists*, si tu navegador está en español); describe tu app con honestidad.
 
 ## Instalación
 
@@ -179,7 +179,7 @@ Después de añadir SoundCrate, reinicia la app (en macOS, ciérrala del todo co
 | Cómo lo instalaste | Cómo actualizar |
 |---|---|
 | **Claude Desktop** (`.mcpb`) | Descarga el último `soundcrate.mcpb` de la [página de versiones](https://github.com/C4denaX/soundcrate-mcp/releases/latest) y ábrelo de nuevo. Tus credenciales siguen en el almacén seguro de tu sistema. |
-| **Claude Code o Cowork** (plugin) | Ejecuta `/plugin`, abre la pestaña **Marketplaces**, elige `soundcrate` y actualízalo (o activa ahí la actualización automática); después recarga el plugin o reinicia la app. |
+| **Claude Code o Cowork** (plugin) | Ejecuta `/plugin`, abre la pestaña **Marketplaces**, elige `soundcrate` y actualízalo (o activa ahí la actualización automática); después recarga el plugin o reinicia la app. O `claude plugin update` desde la terminal. |
 | **npx** (VS Code, Cursor, OpenCode, Codex, Gemini CLI…) | Cambia la etiqueta de versión en los argumentos del servidor, por ejemplo `#v1.7.0` por la nueva `#vX.Y.Z` (la última está en la [página de versiones](https://github.com/C4denaX/soundcrate-mcp/releases/latest)), y reinicia la app. Sin etiqueta, `npx` puede seguir usando su copia en caché. |
 | **Copia clonada** | Ejecuta `git pull` en la carpeta y reinicia la app. |
 
@@ -197,7 +197,7 @@ ordenador (`http://127.0.0.1:8976`) y tiene tres pasos:
 3. **Pulsar «Conectar con SoundCloud»** y autorizar la app.
 
 Y ya está. Tus secretos nunca pasan por el chat ni por el modelo de IA. La página se cierra al terminar, al cerrar
-la app o tras 20 minutos sin actividad (si pasa, pide la configuración otra vez: el asistente te da un enlace
+la app o 60 minutos después de tu última acción en la página (la página muestra hasta qué hora sigue abierta; si caduca, pide la configuración otra vez: el asistente te da un enlace
 nuevo, y `setup_status` avisa de que la página caducó).
 
 ¿Prefieres la terminal? `npx -y -p github:C4denaX/soundcrate-mcp#v1.7.0 soundcrate-login` abre la misma página.
@@ -217,8 +217,10 @@ lanzamiento, reproducciones y likes. Las búsquedas filtran por género, etiquet
 *subida*; no hay filtro por tonalidad ni por fecha de lanzamiento, pero cada resultado muestra su tonalidad y su
 fecha de lanzamiento.
 
-**Orden Camelot.** Al ordenar por tonalidad el orden es 1A, 1B, 2B, 2A, 3A, 3B, 4B, 4A… (primero la A en los
-números impares y la B en los pares), de modo que cada paso entre números contiguos conserva la letra. Mezclan
+**Orden Camelot.** Al ordenar por tonalidad los números van en orden (ascendente o descendente). Si un número
+tiene las dos letras, se empieza por la que mezcla con la pista anterior, eligiendo la combinación con menos
+choques (nunca más que el orden simple 1A 1B 2A 2B); con empate, en zigzag 1A 1B 2B 2A…. Las pistas sin
+tonalidad van al final. Mezclan
 bien la misma clave, la relativa (mismo número, otra letra) y las vecinas (un número más o menos, misma letra).
 Saltarse un número que no está en la playlist cuenta como choque.
 
@@ -239,7 +241,8 @@ Saltarse un número que no está en la playlist cuenta como choque.
 - Las playlists nuevas son **privadas** salvo que pidas lo contrario.
 - SoundCrate **no puede borrar playlists** ni descargar audio.
 - Los cambios en una misma playlist se aplican **de uno en uno dentro de un mismo proceso de SoundCrate**, y cada
-  escritura relee antes la playlist dos veces y se detiene si cambió entretanto («keeps changing»). Pero no es
+  escritura lee la playlist una vez dentro de ese cerrojo: cuesta una lectura y una escritura (una lectura más solo
+  si la respuesta de SoundCloud no cuadra). Pero no es
   atómico: SoundCloud no permite bloquear una playlist, así que dos sesiones de SoundCrate (dos apps abiertas) o
   la web de SoundCloud editando a la vez la misma playlist pueden pisarse. No lo hagas.
 - Si SoundCloud oculta alguna pista al leer una playlist, SoundCrate **se niega a escribir** en ella, porque
@@ -250,7 +253,14 @@ Saltarse un número que no está en la playlist cuenta como choque.
   Un `track_order` con pistas repetidas conserva las repeticiones.
 - Sustituir una pista restaura la playlist si SoundCloud no acepta la nueva, e indica qué otras copias quitó
   (`removed_elsewhere`) para que la playlist conserve una sola copia de la pista nueva.
-- Quitar una pista que aparece varias veces exige una `position` o `all_copies`; si no, no cambia nada.
+- Si la relectura de la playlist tras una escritura falla, el error dice que el cambio se envió pero no se pudo
+  confirmar, y que no se restauró nada.
+- Restaurar la lista de pistas no deshace los cambios de metadatos de `update_playlist` (título, descripción,
+  género, etiquetas).
+- Quitar una pista que aparece varias veces exige una `position` o `all_copies` (no las dos a la vez); si no, no
+  cambia nada.
+- Las entradas de `track_ids` que no son ids de pista se saltan y se listan en `ignored_ids` (crear, añadir,
+  quitar). `tags` acepta una lista.
 - Las herramientas que escriben están marcadas como tales, así que las apps que lo admiten te piden confirmación
   antes de cambiar una playlist.
 
@@ -304,8 +314,8 @@ opcionales:
 | «SoundCrate is not set up yet» | Di **Ayúdame a configurar SoundCrate**. |
 | No se abre la página de configuración | Pide al asistente el enlace y ábrelo en el navegador de ese mismo ordenador. |
 | «Port 8976 is busy» | Cierra cualquier otra página de configuración o inicio de sesión de SoundCrate y vuelve a intentarlo. |
-| SoundCloud rechaza la Redirect URI | Solo se puede con una instalación manual (npx o copia clonada, mira [Otras apps](#otras-apps)): pon `http://localhost:8976/callback` en tu app de SoundCloud y añade `SC_REDIRECT_URI=http://localhost:8976/callback` al entorno del servidor. La extensión y el plugin no permiten cambiarla. |
-| «The setup page expired» | Se cierra tras 20 minutos sin actividad. Pide al asistente que inicie la configuración otra vez. |
+| SoundCloud rechaza la Redirect URI | Solo se puede con una instalación manual (npx o copia clonada, mira [Otras apps](#otras-apps)): pon `http://localhost:8976/callback` en tu app de SoundCloud y añade `SC_REDIRECT_URI=http://localhost:8976/callback` al entorno del servidor. La extensión no tiene forma de definirla. El `.mcp.json` del plugin no la define, pero el servidor podría heredarla si `SC_REDIRECT_URI` está en el entorno con el que se lanza Claude Code (no verificado). |
+| «The setup page expired» | Se cierra 60 minutos después de tu última acción en la página. Pide al asistente que inicie la configuración otra vez. |
 | «SoundCloud rate limit reached» | El mensaje dice cuándo se restablece el cupo. Espera hasta entonces. |
 | Linux: «secret-tool is not installed» | Instálalo: `sudo apt install libsecret-tools gnome-keyring` (Debian/Ubuntu), `sudo dnf install libsecret` (Fedora), `sudo pacman -S libsecret` (Arch). |
 | «The saved session is no longer valid» | Di **Vuelve a conectar SoundCrate** y conecta de nuevo en la página de configuración. |

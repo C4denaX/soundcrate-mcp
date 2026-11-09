@@ -19,7 +19,7 @@ server, account or cloud service, and the project collects nothing.
 |---|---|
 | Requests to SoundCloud | Directly from your computer to `api.soundcloud.com` and `secure.soundcloud.com`. SoundCrate refuses to send your token to any other address. |
 | Client ID, Client Secret, refresh token | Your operating system's secret store: macOS Keychain, Linux Secret Service or Windows Credential Manager. Only if you set `SC_SECRET_STORE=file` are they kept in an unencrypted local file protected by file permissions. |
-| Credentials you type during setup | The setup page runs on `127.0.0.1` on your computer and passes them straight to the secret store. They are never sent to your AI assistant or written to the chat. The page closes when setup finishes, when the MCP client closes, or after 20 minutes without activity. |
+| Credentials you type during setup | The setup page runs on `127.0.0.1` on your computer and passes them straight to the secret store. They are never sent to your AI assistant or written to the chat. The page closes when setup finishes, when the MCP client closes, or 60 minutes after your last action on the page. |
 | Tool results (track lists, playlist contents, your username…) | Returned to the MCP client that started SoundCrate (Claude, OpenCode, Cursor…). What that client does with them is governed by its own privacy policy. |
 
 SoundCrate has **no analytics, telemetry, crash reporting or third-party services**, and it writes no logs
