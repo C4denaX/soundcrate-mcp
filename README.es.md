@@ -260,7 +260,7 @@ Saltarse un número que no está en la playlist cuenta como choque.
 - Quitar una pista que aparece varias veces exige una `position` o `all_copies` (no las dos a la vez); si no, no
   cambia nada.
 - Las entradas de `track_ids` que no son ids de pista se saltan y se listan en `ignored_ids` (crear, añadir,
-  quitar). `tags` acepta una lista.
+  quitar). Si no queda ningún id válido, no se hace nada y se devuelve un error (sin `ignored_ids`). `tags` acepta una lista.
 - Las herramientas que escriben están marcadas como tales, así que las apps que lo admiten te piden confirmación
   antes de cambiar una playlist.
 
@@ -314,7 +314,7 @@ opcionales:
 | «SoundCrate is not set up yet» | Di **Ayúdame a configurar SoundCrate**. |
 | No se abre la página de configuración | Pide al asistente el enlace y ábrelo en el navegador de ese mismo ordenador. |
 | «Port 8976 is busy» | Cierra cualquier otra página de configuración o inicio de sesión de SoundCrate y vuelve a intentarlo. |
-| SoundCloud rechaza la Redirect URI | Solo se puede con una instalación manual (npx o copia clonada, mira [Otras apps](#otras-apps)): pon `http://localhost:8976/callback` en tu app de SoundCloud y añade `SC_REDIRECT_URI=http://localhost:8976/callback` al entorno del servidor. La extensión no tiene forma de definirla. El `.mcp.json` del plugin no la define, pero el servidor podría heredarla si `SC_REDIRECT_URI` está en el entorno con el que se lanza Claude Code (no verificado). |
+| SoundCloud rechaza la Redirect URI | Con una instalación manual (npx o copia clonada, mira [Otras apps](#otras-apps)): pon `http://localhost:8976/callback` en tu app de SoundCloud y añade `SC_REDIRECT_URI=http://localhost:8976/callback` al entorno del servidor. Extensión de Claude Desktop: no hay forma de definirla. Plugin: su `.mcp.json` no la define y no está verificado que el servidor herede el entorno con el que se lanza Claude Code, así que no cuentes con ello; si la necesitas, usa una instalación manual. |
 | «The setup page expired» | Se cierra 60 minutos después de tu última acción en la página. Pide al asistente que inicie la configuración otra vez. |
 | «SoundCloud rate limit reached» | El mensaje dice cuándo se restablece el cupo. Espera hasta entonces. |
 | Linux: «secret-tool is not installed» | Instálalo: `sudo apt install libsecret-tools gnome-keyring` (Debian/Ubuntu), `sudo dnf install libsecret` (Fedora), `sudo pacman -S libsecret` (Arch). |

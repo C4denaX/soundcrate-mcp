@@ -257,7 +257,8 @@ number that isn't in the playlist counts as a clash.
   tags).
 - Removing a track that appears several times needs a `position` or `all_copies` (not both); otherwise nothing
   changes.
-- Entries in `track_ids` that are not track ids are skipped and listed in `ignored_ids` (create, add, remove).
+- Entries in `track_ids` that are not track ids are skipped and listed in `ignored_ids` (create, add, remove). If no valid id is left, nothing is done and an error is returned
+  (without `ignored_ids`).
   `tags` accepts a list.
 - Write tools are marked as such, so apps that support it ask you before changing a playlist.
 
@@ -310,7 +311,7 @@ Secrets are never passed as command-line arguments (where other programs could s
 | "SoundCrate is not set up yet" | Say **Help me set up SoundCrate**. |
 | The setup page doesn't open | Ask the assistant for the link and open it in your browser on the same computer. |
 | "Port 8976 is busy" | Close any other SoundCrate setup page or terminal login and try again. |
-| SoundCloud rejects the Redirect URI | Only possible with a manual install (npx or cloned copy, see [Other apps](#other-apps)): use `http://localhost:8976/callback` in your SoundCloud app and add `SC_REDIRECT_URI=http://localhost:8976/callback` to the server's environment. The extension has no way to set it. The plugin's `.mcp.json` doesn't set it, but the server may inherit it if `SC_REDIRECT_URI` is in the environment Claude Code is launched with (not verified). |
+| SoundCloud rejects the Redirect URI | With a manual install (npx or cloned copy, see [Other apps](#other-apps)): use `http://localhost:8976/callback` in your SoundCloud app and add `SC_REDIRECT_URI=http://localhost:8976/callback` to the server's environment. Claude Desktop extension: there is no way to set it. Plugin: its `.mcp.json` doesn't set it, and it is not verified that the server inherits the environment Claude Code is launched with, so don't count on it; use a manual install if you need this. |
 | "The setup page expired" | It closes after 60 minutes since your last action on the page. Ask the assistant to start the setup again. |
 | "SoundCloud rate limit reached" | The message says when the quota resets. Wait until then. |
 | Linux: "secret-tool is not installed" | Install it: `sudo apt install libsecret-tools gnome-keyring` (Debian/Ubuntu), `sudo dnf install libsecret` (Fedora), `sudo pacman -S libsecret` (Arch). |
