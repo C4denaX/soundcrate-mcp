@@ -1,11 +1,18 @@
 // Guard de red para las pruebas: ninguna prueba debe salir a internet. Se carga con
 //   node --import ./tests/_noNetwork.mjs tests/testN.mjs
-// (--import existe desde Node 18.18/20.6, así que npm test necesita al menos ese Node; el servidor en sí solo
+// (--import existe desde Node 18.18/19.0, así que npm test necesita al menos ese Node; el servidor en sí solo
 // necesita Node >=18, por eso engines no cambia) y se propaga a los procesos hijos (server.mjs, login.mjs…)
 // mediante NODE_OPTIONS, que heredan.
-// Solo se permiten destinos locales: 127.0.0.1, localhost, ::1 (y *.localhost), su forma IPv4-mapped
-// (::ffff:127.0.0.1, que URL normaliza a ::ffff:7f00:1) y las IP de las interfaces propias.
-// Hueco conocido: los procesos hijos que no son Node (curl, etc.) no quedan bloqueados; ninguna prueba lanza uno.
+// Solo se permiten destinos locales: 127.0.0.1, localhost, ::1 (y *.localhost), 0.0.0.0 y :: (direcciones sin
+// especificar: sirven para escuchar, no enrutan a otro equipo), su forma IPv4-mapped (::ffff:127.0.0.1, que URL
+// normaliza a ::ffff:7f00:1) y las IP de las interfaces propias.
+// Huecos teóricos conocidos, fuera de lo que cubren las pruebas actuales:
+// - Procesos hijos que no son Node (curl, etc.): no quedan bloqueados; ninguna prueba lanza uno.
+// - worker_threads: el guard parchea módulos del hilo principal. NODE_OPTIONS se hereda, pero no hay prueba de que
+//   un Worker no use otra vía para salir a la red.
+// - dns.Resolver: las instancias tienen sus propios métodos (resolve*, reverse…), que no pasan por los parches del
+//   módulo dns.
+// - dns.reverse y dns.lookupService: no se parchean; pueden salir a la red sin resolver un nombre de destino.
 import dns from "node:dns";
 import dgram from "node:dgram";
 import http from "node:http";
@@ -14,7 +21,7 @@ import net from "node:net";
 import os from "node:os";
 import tls from "node:tls";
 
-const LOCAL = /^(127\.\d+\.\d+\.\d+|localhost|.*\.localhost|::1)$/i;
+const LOCAL = /^(127\.\d+\.\d+\.\d+|localhost|.*\.localhost|::1|0\.0\.0\.0|::)$/i;
 // Las IP de las interfaces propias también cuentan como locales (test11 comprueba que el puerto NO responde ahí).
 const own = () => { try { return new Set(Object.values(os.networkInterfaces()).flat().map((i) => i.address)); } catch { return new Set(); } };
 // IPv4-mapped en forma decimal (::ffff:127.0.0.1) o hexadecimal (::ffff:7f00:1): las dos son 127.x.x.x.
