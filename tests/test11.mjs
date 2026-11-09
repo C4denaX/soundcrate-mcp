@@ -178,6 +178,12 @@ const good = (key, extra = {}) => ({ k: key, client_id: "abcdefgh123", client_se
     assert.ok(!fs.existsSync(marker), "ni siquiera se lanza xdg-open");
     assert.equal(await open({ PATH: dir, WAYLAND_DISPLAY: "wayland-0" }), true, "con Wayland");
     assert.equal(await open({ PATH: path.join(dir, "no"), DISPLAY: ":0" }), false, "xdg-open no instalado");
+    // Opt-out de pruebas: SC_NO_BROWSER no abre nada aunque haya navegador disponible (test19 en Windows: rundll32
+    // está en System32 y no depende de PATH, así que vaciar PATH no basta).
+    const marker2 = path.join(dir, "ran-no-browser");
+    fake(`/usr/bin/touch ${marker2}; exit 0`);
+    assert.equal(await open({ PATH: dir, DISPLAY: ":0", SC_NO_BROWSER: "1" }), false, "SC_NO_BROWSER desactiva la apertura");
+    assert.ok(!fs.existsSync(marker2), "con SC_NO_BROWSER ni siquiera se lanza el comando");
   }
   fs.rmSync(dir, { recursive: true, force: true });
   console.log("#23 openBrowser OK");
