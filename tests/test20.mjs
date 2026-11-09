@@ -88,6 +88,97 @@ import * as guard from "./_noNetwork.mjs";
   await assert.rejects(lookup("192.0.2.1"), /BLOQUEADA/, "dns.lookup a un destino no local debe bloquearse");
   await assert.rejects(Promise.resolve().then(() => dns.promises.lookup("192.0.2.1")), /BLOQUEADA/, "dns.promises.lookup a un destino no local debe bloquearse");
 
+  // Ronda 7: dgram.connect(port, addr) + send(). dgram resuelve addr con el lookup del socket, que deja pasar
+  // "0.0.0.0"/"::" (bind los necesita), y send() sin address no tenía nada que filtrar: el datagrama llegaba a
+  // loopback. Se abre un receptor local y se exige (a) error propio de dgram.connect con "BLOQUEADA" y (b) que el
+  // receptor no reciba nada. 192.0.2.1 (TEST-NET-1) exige el error del parche de connect, no el de dns.lookup.
+  const receiver = (type, host) => new Promise((res) => {
+    const r = dgram.createSocket(type);
+    const got = [];
+    r.on("message", (m) => got.push(String(m)));
+    r.once("error", () => { try { r.close(); } catch {} res(null); });
+    r.bind(0, host, () => res({ r, got, port: r.address().port }));
+  });
+  const closeQuiet = (x) => { try { x.close(); } catch {} };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Intenta connect+send; devuelve el error (síncrono, evento 'error' o callback de connect) o null.
+  const tryConnectSend = async (type, port, addr, opts = {}, direct = false) => {
+    const u = direct ? new dgram.Socket({ type, ...opts }) : dgram.createSocket({ type, ...opts });
+    let err = null;
+    let settle;
+    // Una excepción no capturada (p. ej. el dns.lookup bloqueado dentro del connect si faltara el parche) se captura
+    // aquí para que el assert de abajo falle con un mensaje claro y no con un crash del proceso.
+    const onUncaught = (e) => { err ??= e; settle?.(); };
+    process.on("uncaughtException", onUncaught);
+    const settled = new Promise((r) => { settle = r; });
+    u.on("error", (e) => { err ??= e; settle(); });
+    try {
+      u.connect(port, addr, (e) => { if (e) err ??= e; settle(); });
+      await Promise.race([settled, sleep(300)]);
+      if (!err) await new Promise((r) => { try { u.send(Buffer.from("x"), (e) => { if (e) err ??= e; r(); }); } catch (e) { err ??= e; r(); } });
+    } catch (e) { err ??= e; }
+    await sleep(300);
+    process.off("uncaughtException", onUncaught);
+    closeQuiet(u);
+    return err;
+  };
+  const r4 = await receiver("udp4", "127.0.0.1");
+  assert.ok(r4, "receptor UDP en 127.0.0.1");
+  const r6 = await receiver("udp6", "::1");
+  if (!r6) console.warn("AVISO test20: sin IPv6 (::1) en esta máquina; se omiten los casos udp6 de dgram.connect");
+  const cases = [["udp4", "0.0.0.0", r4], ["udp4", "192.0.2.1", r4]];
+  if (r6) cases.push(["udp6", "::", r6], ["udp6", "::ffff:0.0.0.0", r6]);
+  for (const [type, addr, rc] of cases) {
+    const err = await tryConnectSend(type, rc.port, addr);
+    assert.match(err?.message ?? "", /BLOQUEADA/, `dgram.connect(${type}) a ${addr} debe bloquearse`);
+    assert.match(err?.message ?? "", /dgram\.connect/, `dgram.connect a ${addr} debe fallar con el error propio de dgram.connect`);
+    assert.deepEqual(rc.got, [], `ningún datagrama debe llegar al receptor local tras connect a ${addr}`);
+  }
+  // new dgram.Socket(...) directo (sin createSocket): el parche vive en el prototipo y también debe cubrirlo.
+  for (const addr of ["0.0.0.0", "192.0.2.1"]) {
+    const err = await tryConnectSend("udp4", r4.port, addr, {}, true);
+    assert.match(err?.message ?? "", /BLOQUEADA/, `new dgram.Socket: connect a ${addr} debe bloquearse`);
+    assert.match(err?.message ?? "", /dgram\.connect/, `new dgram.Socket: connect a ${addr} debe fallar con el error de dgram.connect`);
+    assert.deepEqual(r4.got, [], `new dgram.Socket: nada llega al receptor tras connect a ${addr}`);
+  }
+  // Resultado de la resolución: "localhost" es local, pero un lookup propio lo lleva a 192.0.2.1 (TEST-NET-1).
+  const evil = (a, f, cb) => (a === "localhost" ? cb(null, "192.0.2.1", 4) : dns.lookup(a, f, cb));
+  const errR = await tryConnectSend("udp4", r4.port, "localhost", { lookup: evil });
+  assert.match(errR?.message ?? "", /BLOQUEADA/, "connect a localhost con lookup que resuelve a IP externa debe bloquearse");
+  assert.match(errR?.message ?? "", /dgram\.connect/, "el bloqueo del resultado es el de dgram.connect");
+  assert.deepEqual(r4.got, [], "nada llega al receptor tras el connect con lookup hostil");
+
+  // Red de seguridad: new dgram.Socket directo con lookup hostil no pasa por el envoltorio del lookup, pero send()
+  // tras conectar mira remoteAddress() y se niega a enviar a una IP no local.
+  {
+    const d = new dgram.Socket({ type: "udp4", lookup: evil });
+    d.on("error", () => {});
+    await new Promise((res) => { d.connect(r4.port, "localhost", () => res()); setTimeout(res, 300); });
+    let eS = null;
+    try { d.send(Buffer.from("x")); } catch (e) { eS = e; }
+    assert.match(eS?.message ?? "", /BLOQUEADA/, "new dgram.Socket con lookup hostil: send tras connect debe bloquearse");
+    assert.match(eS?.message ?? "", /dgram\.send/, "el bloqueo es el de dgram.send (conectado)");
+    closeQuiet(d);
+  }
+
+  guard.noNetworkReset?.(); // los bloqueos de arriba son intencionales
+  // Positivos (tras el reset: cualquier bloqueo a partir de aquí hace fallar la suite al salir)
+  for (const [type, host] of [["udp4", "0.0.0.0"], ...(r6 ? [["udp6", "::"]] : [])]) {
+    const b = dgram.createSocket(type);
+    await new Promise((res, rej) => { b.once("error", rej); b.bind(0, host, res); });
+    closeQuiet(b);
+  }
+  for (const [type, host, rc] of [["udp4", "127.0.0.1", r4], ...(r6 ? [["udp6", "::1", r6]] : [])]) {
+    const u = dgram.createSocket(type);
+    await new Promise((res, rej) => { u.once("error", rej); u.connect(rc.port, host, res); });
+    await new Promise((res, rej) => u.send(Buffer.from("ok"), (e) => (e ? rej(e) : res())));
+    for (let i = 0; i < 20 && !rc.got.includes("ok"); i++) await sleep(25);
+    assert.ok(rc.got.includes("ok"), `send tras connect a ${host} sigue llegando al receptor local`);
+    rc.got.length = 0;
+    closeQuiet(u);
+  }
+  closeQuiet(r4.r); if (r6) closeQuiet(r6.r);
+
   guard.noNetworkReset?.(); // el guard antiguo (1.7.0) no exporta nada: los bloqueos intencionales no pasaban de aquí
 }
 console.log("test20 OK");

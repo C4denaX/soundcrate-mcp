@@ -95,16 +95,58 @@ net.Socket.prototype.connect = function (...a) {
 };
 
 // UDP (dgram): send(msg[, offset, length,] port[, address][, cb]); sin address el destino es localhost.
+// connect(port[, address][, cb]) también se vigila: dgram.connect resuelve la dirección con el lookup del socket, y ese
+// lookup deja pasar "0.0.0.0"/"::" (lo necesita bind), de modo que un connect a una dirección sin especificar seguido
+// de send() ya no pasaba por el filtro de send (la dirección explícita no existe). Dos controles:
+//  1) dgram.Socket.prototype.connect: isLocal sobre la dirección ANTES de resolverla (error propio "dgram.connect",
+//     síncrono) y registro de la dirección como destino pendiente. El parche va en el prototipo (connect y send), así
+//     que cubre también new dgram.Socket(...);
+//  2) el lookup del socket (el propio de dgram.createSocket({lookup}) o dns.lookup, envuelto siempre): si es la
+//     resolución del destino de un connect pendiente, se comprueba la IP RESULTANTE con isLocal y, si no es local,
+//     se devuelve error al lookup, así que dgram nunca llega a conectar y send() no puede enviar nada. Es más robusto
+//     que mirar remoteAddress() en el evento 'connect' (para entonces el socket ya está conectado) y cubre un
+//     "localhost" o nombre que un lookup propio resuelva a otra IP. El bind (que usa el mismo lookup con 0.0.0.0/::)
+//     no se toca: solo se inspecciona la resolución cuya dirección coincide con el destino de un connect pendiente.
+//  3) Red de seguridad en send: si el socket ya está conectado, remoteAddress() también debe ser local.
+// Falta: con new dgram.Socket directo y un lookup propio, solo se comprueba el nombre, no la IP resultante (el
+// envoltorio del lookup solo se instala en dgram.createSocket); lo único que lo frena es el control 3 en send(), una
+// vez conectado.
+const connecting = new WeakMap(); // socket -> Set de destinos de connect pendientes de resolver
 const createSocket = dgram.createSocket;
-dgram.createSocket = function (...a) {
-  const s = createSocket.apply(this, a);
-  const send = s.send;
-  s.send = function (msg, ...rest) {
-    const cand = rest.length >= 4 ? rest[3] : rest[1];
-    if (typeof cand === "string" && !isLocal(cand)) throw blocked("dgram.send", cand);
-    return send.call(this, msg, ...rest);
+dgram.createSocket = function (opts, ...rest) {
+  const o = typeof opts === "string" ? { type: opts } : { ...opts };
+  let s;
+  const userLookup = o.lookup;
+  o.lookup = function (addr, family, cb) {
+    const base = userLookup ?? dns.lookup;
+    const pending = s && connecting.get(s);
+    if (!pending || !pending.has(addr)) return base.call(this, addr, family, cb);
+    return base.call(this, addr, family, function (err, ip, ...more) {
+      if (!err && !isLocal(ip)) {
+        pending.delete(addr);
+        return cb.call(this, blocked("dgram.connect (resuelto)", `${addr} -> ${ip}`));
+      }
+      return cb.call(this, err, ip, ...more);
+    });
   };
+  s = createSocket.call(this, o, ...rest);
   return s;
+};
+const dgSend = dgram.Socket.prototype.send;
+dgram.Socket.prototype.send = function (msg, ...rest) {
+  const cand = rest.length >= 4 ? rest[3] : rest[1];
+  if (typeof cand === "string" && !isLocal(cand)) throw blocked("dgram.send", cand);
+  let remote = null;
+  try { remote = this.remoteAddress().address; } catch {} // sin conectar: lanza ERR_SOCKET_DGRAM_NOT_CONNECTED
+  if (remote !== null && !isLocal(remote)) throw blocked("dgram.send (conectado)", remote);
+  return dgSend.call(this, msg, ...rest);
+};
+const dgConnect = dgram.Socket.prototype.connect;
+dgram.Socket.prototype.connect = function (port, address, ...more) {
+  const addr = typeof address === "string" ? address : undefined; // sin address: localhost
+  if (addr !== undefined && !isLocal(addr)) throw blocked("dgram.connect", addr);
+  if (addr !== undefined) { const p = connecting.get(this) ?? new Set(); p.add(addr); connecting.set(this, p); }
+  return dgConnect.call(this, port, address, ...more);
 };
 
 // DNS: resolver un nombre externo también es salir a la red (y delata el destino aunque luego se bloquee la conexión).
