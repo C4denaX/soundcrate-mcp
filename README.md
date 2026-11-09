@@ -258,7 +258,7 @@ number that isn't in the playlist counts as a clash.
 - Removing a track that appears several times needs a `position` or `all_copies` (not both); otherwise nothing
   changes.
 - Entries in `track_ids` that are not track ids are skipped and listed in `ignored_ids` (create, add, remove). If no valid id is left, nothing is done and an error is returned
-  (without `ignored_ids`).
+  (without `ignored_ids`). A `track_ids` list (or text like `"1,2"`) with entries but none valid, including text made only of commas or blanks, is that same error. To create a playlist without tracks, leave `track_ids` out or pass an empty list (`[]` or `""`).
   `tags` accepts a list.
 - Write tools are marked as such, so apps that support it ask you before changing a playlist.
 

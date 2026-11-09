@@ -260,7 +260,7 @@ Saltarse un número que no está en la playlist cuenta como choque.
 - Quitar una pista que aparece varias veces exige una `position` o `all_copies` (no las dos a la vez); si no, no
   cambia nada.
 - Las entradas de `track_ids` que no son ids de pista se saltan y se listan en `ignored_ids` (crear, añadir,
-  quitar). Si no queda ningún id válido, no se hace nada y se devuelve un error (sin `ignored_ids`). `tags` acepta una lista.
+  quitar). Si no queda ningún id válido, no se hace nada y se devuelve un error (sin `ignored_ids`). Una lista de `track_ids` (o un texto como `"1,2"`) con entradas pero ninguna válida, también un texto que solo trae comas o blancos, da ese mismo error. Para crear una playlist sin pistas, omite `track_ids` o pasa una lista vacía (`[]` o `""`). `tags` acepta una lista.
 - Las herramientas que escriben están marcadas como tales, así que las apps que lo admiten te piden confirmación
   antes de cambiar una playlist.
 

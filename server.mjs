@@ -1692,6 +1692,7 @@ function coerceArg(name, v, sch) {
       return bad("text");
     }
     case "array": {
+      const isIdField = /(_ids|^track_order)$/.test(name);
       let arr = typeof v === "number" && Number.isFinite(v) ? [String(v)] : v; // un id suelto
       if (typeof arr === "string") {
         const t = arr.trim();
@@ -1701,14 +1702,21 @@ function coerceArg(name, v, sch) {
             if (Array.isArray(j)) arr = j;
           } catch {}
         }
-        if (typeof arr === "string") arr = t.split(",").map((x) => x.trim()).filter(Boolean);
+        if (typeof arr === "string") {
+          const raw = arr;
+          arr = t.split(",").map((x) => x.trim()).filter(Boolean);
+          // Texto no vacío que solo trae separadores o blancos (" , ", ",", "\t"): igual que [""]; el texto "" cuenta como omitido.
+          if (!arr.length && raw !== "" && isIdField) {
+            throw new Error(`Argument "${name}": the list only has empty entries (null or blank); give at least one id, or leave it out.`);
+          }
+        }
       }
       if (!Array.isArray(arr)) return bad("a list (an array, or text like \"1,2\")");
       const it = sch.items || {};
       // Campos de ids (track_ids, track_order, seed_track_ids…): una lista que solo trae nulos o entradas en blanco no dice
       // nada, y seguir como si fuera vacía crearía una playlist vacía o gastaría peticiones: error claro. En el resto de listas
       // (filtros como genres o tags) una lista vacía o de nulos equivale a omitir el campo.
-      if (/(_ids|^track_order)$/.test(name) && arr.length && arr.every((x) => x == null || (typeof x === "string" && !x.trim()))) {
+      if (isIdField && arr.length && arr.every((x) => x == null || (typeof x === "string" && !x.trim()))) {
         throw new Error(`Argument "${name}": the list only has empty entries (null or blank); give at least one id, or leave it out.`);
       }
       return arr.flatMap((x, i) => {
@@ -1732,7 +1740,9 @@ function coerceArgs(schema, args) {
   for (const [name, sch] of Object.entries(props)) {
     let v = out[name];
     // null, y un texto vacío salvo en campos de texto libre (donde "" puede ser un valor: vaciar una descripción), cuentan como omitidos.
-    if (v === null || (typeof v === "string" && !v.trim() && (sch.type !== "string" || sch.enum))) {
+    // Excepción: en un campo de ids, un texto con blancos pero no vacío (" ", "\t") no cuenta como omitido: da el error de ids vacíos.
+    const blankIds = sch.type === "array" && /(_ids|^track_order)$/.test(name) && typeof v === "string" && v !== "";
+    if (v === null || (typeof v === "string" && !v.trim() && !blankIds && (sch.type !== "string" || sch.enum))) {
       delete out[name];
       v = undefined;
     }

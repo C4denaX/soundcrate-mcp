@@ -72,7 +72,7 @@ Tell the user, in plain language, how to get them:
 - Before removing, replacing or reordering tracks in an existing playlist, tell the user what will change and get
   a clear yes. SoundCrate cannot delete playlists.
 - Removing a track that appears more than once needs `position` or `all_copies` (not both). Entries of `track_ids`
-  that are not track ids are skipped and listed in `ignored_ids` (create, add, remove); if no valid id is left, nothing is done and an error is returned (no `ignored_ids`). `tags` accepts a list.
+  that are not track ids are skipped and listed in `ignored_ids` (create, add, remove); if no valid id is left, nothing is done and an error is returned (no `ignored_ids`), including a list or text with entries but none valid (e.g. `" , "`). Creating without tracks means omitting `track_ids` or passing an empty list (`[]` or `""`). `tags` accepts a list.
   A write costs 1 GET + 1 PUT (one more GET only if the PUT reply doesn't match); if the re-read fails the error
   says the change was sent but not confirmed and nothing was restored. `replace_track_in_playlist`
   lists the other copies it removed in `removed_elsewhere`; if a write loses tracks the playlist is restored.
