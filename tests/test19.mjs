@@ -112,4 +112,68 @@ try {
   for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);
   fs.rmSync(dir, { recursive: true, force: true });
 }
+
+// ---------- Canje tras reponer las credenciales: la MISMA URL, con un token endpoint local simulado ----------
+// Cubre lo que hasta la ronda 4 solo se comprobaba a mano: sin credenciales el state no se consume, y al guardarlas
+// la misma URL de vuelta canjea. El token endpoint es un HTTP local de verdad (el canje va por fetch a 127.0.0.1).
+{
+  let tokenCalls = 0;
+  let tokenBody = "";
+  const tokenSrv = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      tokenCalls++;
+      tokenBody = body;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ access_token: "fake-access", refresh_token: "fake-refresh", expires_in: 3600 }));
+    });
+  });
+  await new Promise((r) => tokenSrv.listen(0, "127.0.0.1", r));
+  const tokenPort = tokenSrv.address().port;
+  const tokenRequest = async (params) => {
+    const r = await fetch(`http://127.0.0.1:${tokenPort}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params),
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`SoundCloud /oauth/token ${r.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text);
+  };
+  const m = new Map([["client_id", "FAKEID12345"], ["client_secret", "fake-secret-XYZ"]]);
+  const mem = { label: "mem", get: (a) => m.get(a) ?? null, set: (a, v) => m.set(a, v), del: (a) => m.delete(a), probe: () => ({ ok: true }) };
+  let haveCreds = true;
+  const cbPort2 = await free();
+  const { startSetup } = await import("../setup.mjs");
+  const s = await startSetup({
+    store: mem,
+    credentials: () => {
+      if (!haveCreds) throw new Error("SoundCrate is not set up yet: the SoundCloud app credentials (Client ID and Client Secret) are missing.");
+      return { clientId: m.get("client_id"), clientSecret: m.get("client_secret") };
+    },
+    tokenRequest,
+    fetchFn: async () => Response.json({ username: "tester" }),
+    redirectUri: `http://127.0.0.1:${cbPort2}/callback`,
+    open: false,
+  });
+  try {
+    const connectUrl = s.url.replace("/setup?", "/setup/connect?");
+    const state = new URL((await fetch(connectUrl, { redirect: "manual" })).headers.get("location")).searchParams.get("state");
+    const sameUrl = `http://127.0.0.1:${cbPort2}/callback?code=CODE1&state=${encodeURIComponent(state)}`;
+    haveCreds = false;
+    await assert.rejects(s.completeFromUrl(sameUrl), (e) => e.code === "no_credentials");
+    assert.equal(tokenCalls, 0, "sin credenciales no se llama al token endpoint");
+    haveCreds = true;
+    assert.equal(await s.completeFromUrl(sameUrl), "tester");
+    assert.equal(tokenCalls, 1, "la MISMA URL canjea tras reponer las credenciales");
+    assert.match(tokenBody, /grant_type=authorization_code/);
+    assert.equal(m.get("refresh_token"), "fake-refresh");
+  } finally {
+    s.close();
+    await s.done;
+    tokenSrv.closeAllConnections?.();
+    await new Promise((r) => tokenSrv.close(r));
+  }
+}
 process.exit(0);
