@@ -523,7 +523,10 @@ test("#24 al cerrarse stdin con start_setup activo el proceso sale solo y libera
     });
   } finally {
     child.kill("SIGKILL");
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Windows: rmdir falla con EBUSY si el hijo aún no ha salido (aunque esté matado). Esperar al 'exit' y usar
+    // reintentos al borrar.
+    for (let i = 0; i < 50 && !exited; i++) await sleep(100);
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });
 
@@ -546,7 +549,8 @@ test("#24 con stdin cerrado el servidor contesta antes de salir (varias peticion
     assert.deepEqual(ids, [1, 2]);
   } finally {
     child.kill("SIGKILL");
-    fs.rmSync(dir, { recursive: true, force: true });
+    await Promise.race([exited, sleep(5000)]); // Windows: no borrar la carpeta antes de que el hijo salga (EBUSY)
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });
 

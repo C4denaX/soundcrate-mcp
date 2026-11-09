@@ -22,6 +22,22 @@ const free = () =>
     });
   });
 
+// Preloads del hijo: el guard primero y el token endpoint falso después (el segundo envuelve al fetch ya vigilado).
+// Si la prueba se lanza ya con el guard en NODE_OPTIONS, no se duplica.
+const guardUrl = new URL("./_noNetwork.mjs", import.meta.url).href;
+const fakeOAuthUrl = new URL("./_fakeOAuth.mjs", import.meta.url).href;
+const withPreloads = (base = "") => {
+  let opts = String(base ?? "");
+  if (!opts.includes(guardUrl)) opts = `${opts} --import ${guardUrl}`.trim();
+  if (!opts.includes(fakeOAuthUrl)) opts = `${opts} --import ${fakeOAuthUrl}`.trim();
+  return opts;
+};
+// Espera a que el hijo salga (Windows: no se puede borrar su carpeta antes; rmdir da EBUSY).
+const waitExit = async (child, ms = 5000) => {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  await Promise.race([new Promise((r) => child.once("exit", r)), sleep(ms)]);
+};
+
 const cbPort = await free();
 const isolation = {
   SC_SECRET_STORE: "file",
@@ -37,6 +53,7 @@ const env = {
   ...process.env,
   ...isolation,
   SC_NO_BROWSER: "1",
+  NODE_OPTIONS: withPreloads(process.env.NODE_OPTIONS),
 };
 delete env.PATH;
 delete env.Path;
@@ -109,14 +126,21 @@ try {
   try {
     child?.kill();
   } catch {}
+  await waitExit(child);
   for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
-// ---------- Canje tras reponer las credenciales: la MISMA URL, con un token endpoint local simulado ----------
-// Cubre lo que hasta la ronda 4 solo se comprobaba a mano: sin credenciales el state no se consume, y al guardarlas
-// la misma URL de vuelta canjea. El token endpoint es un HTTP local de verdad (el canje va por fetch a 127.0.0.1).
+// ---------- login.mjs REAL, canje tras reponer las credenciales y página de éxito antes de salir ----------
+// Sustituye al bloque de la ronda 5 que llamaba a startSetup dentro de este proceso (duplicaba test17): aquí se
+// lanza login.mjs de verdad (hijo, almacén de fichero, SC_NO_BROWSER=1) y el canje va a un token endpoint HTTP
+// local. El preload tests/_fakeOAuth.mjs reescribe la URL del token y /me; no se habla con SoundCloud.
+// Cubre: (1) sin credenciales el state no se consume y la misma URL no canjea; (2) al reponerlas, la MISMA URL
+// canjea; (3) el navegador recibe la página de éxito (200) ANTES de que login.mjs salga con código 0.
 {
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), "sc-test19-login-"));
+  const emptyBin2 = path.join(dir2, "bin");
+  fs.mkdirSync(emptyBin2);
   let tokenCalls = 0;
   let tokenBody = "";
   const tokenSrv = http.createServer((req, res) => {
