@@ -29,7 +29,9 @@ rl.on("line", async (line) => {
   try {
     await s.completeFromUrl(line.trim());
   } catch (e) {
-    console.error("Could not complete the login with that URL:", e.message === "state" ? "it does not match this session" : e.message);
+    console.error("Could not complete the login with that URL:", e.message === "state" ? "that URL does not match this session (wrong, already used, or expired)" : e.message,
+      "\nTo retry: connect again from step 3 on the setup page (or run soundcrate-login again), then paste the new URL."
+    );
   }
 });
 

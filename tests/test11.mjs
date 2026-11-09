@@ -126,7 +126,7 @@ const good = (key, extra = {}) => ({ k: key, client_id: "abcdefgh123", client_se
     await sleep(300);
     await req(t.port, { p: "/setup?k=mala" }).catch(() => {});
   }
-  assert.deepEqual(await t.s.done, { ok: false, reason: "timeout" });
+  assert.deepEqual(await t.s.done, { ok: false, reason: "timeout", idle_minutes: 1 });
   console.log("#21 caducidad por inactividad OK");
 }
 

@@ -26,6 +26,10 @@ const sameSecret = (a, b) => {
 // Abre una URL en el navegador por defecto, en cualquier sistema. Devuelve true solo si hay indicios razonables de
 // que se abrió: en Linux sin sesión gráfica (SSH, contenedor) ni se intenta; si el comando termina con error, es
 // false; si sigue vivo pasado un rato (algunos xdg-open esperan al navegador), se da por abierto.
+// LIMITACIÓN CONOCIDA (#23): con DISPLAY definido pero sin servidor X, o con un navegador que falla, xdg-open puede
+// salir con código 0 y aquí se da por abierto sin estarlo; no hay forma barata y fiable de comprobarlo. Está mitigado
+// porque server.mjs devuelve SIEMPRE la URL en tell_user (el asistente se la da al usuario), así que "opened" es
+// solo una pista, nunca la única vía para llegar a la página.
 export function openBrowser(url, platform = process.platform, { env = process.env, timeoutMs = 3000 } = {}) {
   if (platform !== "darwin" && platform !== "win32" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return Promise.resolve(false);
   const [cmd, args] =
@@ -74,6 +78,9 @@ const T = {
     okBack: "You can close this tab and go back to your assistant.",
     errTitle: "Something went wrong",
     retry: "Back to the setup page",
+    cbHint: "Go back to the setup tab and try step 3 again, or ask your assistant to open the setup page again.",
+    openUntil: "This page stays open until",
+    openUntil2: "; any step you take here extends it.",
     badLink: "This setup link is not valid or has expired. Ask your assistant to start the setup again.",
     reconnect: "You changed the app credentials: connect your account again (step 3).",
     badId: "The Client ID does not look right (letters, numbers, - and _ only).",
@@ -104,6 +111,9 @@ const T = {
     okBack: "Ya puedes cerrar esta pestaña y volver a tu asistente.",
     errTitle: "Algo ha fallado",
     retry: "Volver a la página de configuración",
+    cbHint: "Vuelve a la pestaña de configuración y repite el paso 3, o pide a tu asistente que abra de nuevo la página de configuración.",
+    openUntil: "Esta página sigue abierta hasta las",
+    openUntil2: "; cualquier paso que des aquí amplía el plazo.",
     badLink: "Este enlace de configuración no es válido o ha caducado. Pide a tu asistente que empiece la configuración de nuevo.",
     reconnect: "Has cambiado las credenciales de la app: vuelve a conectar tu cuenta (paso 3).",
     badId: "El Client ID no parece correcto (solo letras, números, - y _).",
@@ -143,7 +153,7 @@ export async function startSetup({
   openFn = openBrowser,
   onSuccess = () => {},
   onCredentialsChanged = () => {}, // al guardar credenciales de OTRA app: el servidor debe vaciar su sesión en memoria
-  timeoutMs = 20 * 60 * 1000,
+  timeoutMs = 60 * 60 * 1000, // plazo de INACTIVIDAD (la actividad con clave válida lo renueva)
 } = {}) {
   if (active) {
     // Página ya abierta: se reintenta abrirla (si se pide) y se devuelve el estado real, no el de la primera llamada.
@@ -170,6 +180,8 @@ export async function startSetup({
   let resolveDone;
   const done = new Promise((r) => (resolveDone = r));
   let timer;
+  let deadline = Date.now() + timeoutMs;
+  let lastFail = null; // { state, message }: canje que falló (el state ya se consumió), para dar la causa real al reintentar
 
   const send = (res, status, html, headers = {}) => {
     res.writeHead(status, {
@@ -185,9 +197,14 @@ export async function startSetup({
   const redirect = (res, to) => send(res, 303, "", { Location: to });
   // El enlace de vuelta lleva la clave: solo se pone cuando quien pide ya la tenía y era válida (backLink). En el
   // resto de respuestas de error (clave mala, /callback que no autentica, 500) no se devuelve nunca.
-  const errorPage = (res, t, msg, status = 400, backLink = false) =>
-    send(res, status, page(t, `<h1>${esc(t.errTitle)}</h1><p class="err">${esc(msg)}</p>${backLink ? `<p><a href="/setup?k=${key}">${esc(t.retry)}</a></p>` : ""}`));
-  const touch = () => timer?.refresh(); // actividad con clave válida: el plazo de caducidad cuenta desde la última
+  // Sin backLink se ofrece una salida SIN clave (texto: volver a la pestaña de configuración o pedir otra página).
+  const errorPage = (res, t, msg, status = 400, backLink = false, hint = false) =>
+    send(res, status, page(t, `<h1>${esc(t.errTitle)}</h1><p class="err">${esc(msg)}</p>${backLink ? `<p><a href="/setup?k=${key}">${esc(t.retry)}</a></p>` : ""}${hint ? `<p>${esc(t.cbHint)}</p>` : ""}`));
+  const touch = () => {
+    // actividad con clave válida: el plazo de caducidad cuenta desde la última
+    deadline = Date.now() + timeoutMs;
+    timer?.refresh();
+  };
   // Refuerzo anti-CSRF del POST (ver cabecera del fichero).
   const originOk = (req) => {
     const o = req.headers.origin;
@@ -216,6 +233,7 @@ export async function startSetup({
     return page(
       t,
       `<h1>${esc(t.title)}</h1><p>${esc(t.intro)} <b>${esc(store.label)}</b>.</p>${note}
+<p class="mut">${esc(t.openUntil)} ${esc(new Date(deadline).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}${esc(t.openUntil2)}</p>
 <section><h2>${esc(t.s1)}</h2><p>${esc(t.s1a)} <a href="${lib.APPS_URL}" target="_blank" rel="noopener noreferrer">${lib.APPS_URL}</a> ${esc(t.s1b)}</p>
 <table><tr><td>${esc(t.name)}</td><td><code>SoundCrate (personal)</code></td></tr><tr><td>${esc(t.desc)}</td><td><code>${esc(t.descVal)}</code></td></tr>
 <tr><td>${esc(t.web)}</td><td>${esc(t.any)}</td></tr><tr><td>${esc(t.redirect)}</td><td><code>${esc(redirectUri)}</code></td></tr></table>
@@ -249,18 +267,32 @@ export async function startSetup({
 
   // Canjea el código de SoundCloud por la sesión y la guarda.
   async function complete(code, state) {
+    if (!oauth && lastFail && code && sameSecret(state, lastFail.state)) {
+      const e = new Error(`the exchange already failed (${lastFail.message}) and the code cannot be reused`);
+      e.code = "exchange_failed";
+      throw e;
+    }
     if (!oauth || !code || !sameSecret(state, oauth.state)) throw new Error("state");
     const o = oauth;
     oauth = null; // el state es de un solo uso, también si el canje falla (el code tampoco se puede reutilizar)
-    const { clientId, clientSecret } = credentials();
-    const tok = await tokenRequest({
-      grant_type: "authorization_code",
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: redirectUri,
-      code_verifier: o.verifier,
-      code,
-    });
+    lastFail = null;
+    let tok;
+    try {
+      const { clientId, clientSecret } = credentials();
+      tok = await tokenRequest({
+        grant_type: "authorization_code",
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        code_verifier: o.verifier,
+        code,
+      });
+    } catch (e) {
+      lastFail = { state: o.state, message: String(e?.message || e).slice(0, 200) };
+      const err = new Error(`the exchange with SoundCloud failed: ${lastFail.message}`);
+      err.code = "exchange_failed";
+      throw err;
+    }
     if (!tok.refresh_token) throw new Error("SoundCloud did not return a refresh_token.");
     store.set("refresh_token", tok.refresh_token);
     let username = null;
@@ -345,12 +377,12 @@ export async function startSetup({
 
       if (req.method === "GET" && u.pathname === cb.pathname) {
         const err = u.searchParams.get("error");
-        if (err) return errorPage(res, t, `SoundCloud: ${err} ${u.searchParams.get("error_description") || ""}`); // sin enlace: esta ruta no autentica
+        if (err) return errorPage(res, t, `SoundCloud: ${err} ${u.searchParams.get("error_description") || ""}`, 400, false, true); // sin enlace: esta ruta no autentica
         try {
           const username = await complete(u.searchParams.get("code"), u.searchParams.get("state"));
           return send(res, 200, page(t, `<h1 class="ok">${esc(t.okTitle)}</h1><p>${esc(t.ok)} <b>${esc(username || "?")}</b>.</p><p>${esc(t.okBack)}</p>`));
         } catch (e) {
-          return errorPage(res, t, e.message === "state" ? t.badLink : e.message);
+          return errorPage(res, t, e.message === "state" ? t.badLink : e.message, 400, false, true);
         }
       }
       return send(res, 404, "Not found");
@@ -369,7 +401,7 @@ export async function startSetup({
     );
     server.listen(port, cb.hostname.replace(/^\[|\]$/g, ""), resolve);
   });
-  timer = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
+  timer = setTimeout(() => finish({ ok: false, reason: "timeout", idle_minutes: Math.max(1, Math.round(timeoutMs / 60000)) }), timeoutMs);
   timer.unref();
 
   const opened = open ? await openFn(url) : false;
