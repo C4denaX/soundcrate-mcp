@@ -48,6 +48,23 @@ async function boot(route, deps = {}) {
   return { S, calls, kc, call };
 }
 
+// Entorno de los procesos hijos: hereda process.env (en Windows hace falta SystemRoot, etc.) y solo pisa lo que aísla.
+const isoEnv = (dir, extra = {}) => {
+  const env = { ...process.env };
+  for (const k of ["SC_CLIENT_ID", "SC_CLIENT_SECRET", "SC_GO_PLUS", "SC_REDIRECT_URI", "SOUNDCRATE_DIST", "CLAUDE_PLUGIN_ROOT"]) delete env[k];
+  return {
+    ...env,
+    HOME: dir,
+    USERPROFILE: dir,
+    APPDATA: dir,
+    XDG_CONFIG_HOME: dir,
+    SC_SECRET_STORE: "file",
+    SC_SECRETS_FILE: path.join(dir, "creds.json"),
+    SC_SECRET_SERVICE: "soundcrate-review",
+    ...extra,
+  };
+};
+
 const cases = [];
 const test = (name, fn) => cases.push([name, fn]);
 
@@ -478,16 +495,11 @@ test("#24 al cerrarse stdin con start_setup activo el proceso sale solo y libera
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sc-lote-d-"));
   const port = await freePort();
   const child = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
-    env: {
-      PATH: process.env.PATH,
-      HOME: dir,
-      SC_SECRET_STORE: "file",
-      SC_SECRETS_FILE: path.join(dir, "creds.json"),
-      SC_SECRET_SERVICE: "soundcrate-review",
+    env: isoEnv(dir, {
       SC_REDIRECT_URI: `http://127.0.0.1:${port}/callback`,
       SC_CLIENT_ID: "fake-client-id",
       SC_CLIENT_SECRET: "fake-client-secret",
-    },
+    }),
     stdio: ["pipe", "pipe", "pipe"],
   });
   let out = "";
@@ -518,7 +530,7 @@ test("#24 al cerrarse stdin con start_setup activo el proceso sale solo y libera
 test("#24 con stdin cerrado el servidor contesta antes de salir (varias peticiones en cola)", async () => {
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sc-lote-d-"));
   const child = spawn(process.execPath, [path.join(ROOT, "server.mjs")], {
-    env: { PATH: process.env.PATH, HOME: dir, SC_SECRET_STORE: "file", SC_SECRETS_FILE: path.join(dir, "creds.json"), SC_SECRET_SERVICE: "soundcrate-review" },
+    env: isoEnv(dir),
     stdio: ["pipe", "pipe", "pipe"],
   });
   let out = "";
