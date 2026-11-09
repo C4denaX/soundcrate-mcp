@@ -159,18 +159,26 @@ const good = (key, extra = {}) => ({ k: key, client_id: "abcdefgh123", client_se
     Object.assign(process.env, saved);
     return p;
   };
-  const env = { PATH: dir, DISPLAY: ":0" };
-  fake("exit 3");
-  assert.equal(await open(env), false, "xdg-open sale con error");
-  fake("exit 0");
-  assert.equal(await open(env), true, "xdg-open ok");
-  fake("/bin/sleep 5");
-  assert.equal(await open(env, { timeoutMs: 200 }), true, "sigue vivo: se da por abierto");
-  fake(`/usr/bin/touch ${marker}; exit 0`);
-  assert.equal(await open({ PATH: dir }), false, "sin DISPLAY ni WAYLAND_DISPLAY");
-  assert.ok(!fs.existsSync(marker), "ni siquiera se lanza xdg-open");
-  assert.equal(await open({ PATH: dir, WAYLAND_DISPLAY: "wayland-0" }), true, "con Wayland");
+  // Los xdg-open falsos son scripts de sh (como en Linux/macOS, donde existe xdg-open/open): en Windows no hay
+  // sh ni execFile arranca scripts sin extensión, así que esos casos se saltan allí. Los dos casos sin script
+  // (sin pantalla y comando inexistente) corren en todas las plataformas.
+  assert.equal(await open({ PATH: path.join(dir, "no") }), false, "sin DISPLAY ni WAYLAND_DISPLAY");
   assert.equal(await open({ PATH: path.join(dir, "no"), DISPLAY: ":0" }), false, "xdg-open no instalado");
+  if (process.platform === "win32") console.log("#23: casos con xdg-open falso SALTADOS en Windows (scripts sh)");
+  else {
+    const env = { PATH: dir, DISPLAY: ":0" };
+    fake("exit 3");
+    assert.equal(await open(env), false, "xdg-open sale con error");
+    fake("exit 0");
+    assert.equal(await open(env), true, "xdg-open ok");
+    fake("/bin/sleep 5");
+    assert.equal(await open(env, { timeoutMs: 200 }), true, "sigue vivo: se da por abierto");
+    fake(`/usr/bin/touch ${marker}; exit 0`);
+    assert.equal(await open({ PATH: dir }), false, "sin DISPLAY ni WAYLAND_DISPLAY");
+    assert.ok(!fs.existsSync(marker), "ni siquiera se lanza xdg-open");
+    assert.equal(await open({ PATH: dir, WAYLAND_DISPLAY: "wayland-0" }), true, "con Wayland");
+    assert.equal(await open({ PATH: path.join(dir, "no"), DISPLAY: ":0" }), false, "xdg-open no instalado");
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   console.log("#23 openBrowser OK");
 }
