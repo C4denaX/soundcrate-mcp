@@ -229,15 +229,24 @@ const idOf = (x, kind) => {
   return m[2];
 };
 // Acepta un array, una cadena separada por comas ("1,2"), un array en JSON ('["1","2"]') o un id suelto.
-const ids = (arr, kind = "tracks") => {
+// splitIds separa los válidos de las entradas que no son un id (se informan como ignored_ids); ids() solo da los válidos.
+const splitIds = (arr, kind = "tracks") => {
   if (typeof arr === "string" && arr.trim().startsWith("[")) {
     try {
       const j = JSON.parse(arr);
       if (Array.isArray(j)) arr = j;
     } catch {}
   }
-  return list(arr).map((x) => idOf(x, kind)).filter(Boolean);
+  const ok = [], ignored = [];
+  for (const x of list(arr)) {
+    const id = idOf(x, kind);
+    if (id) ok.push(id);
+    else ignored.push(x);
+  }
+  return { ok, ignored };
 };
+const ids = (arr, kind = "tracks") => splitIds(arr, kind).ok;
+const ignoredNote = (ignored) => (ignored.length ? { ignored_ids: ignored } : {});
 const rid = (o) => (o?.id != null ? String(o.id) : idOf(o?.urn) ?? o?.urn ?? null);
 const releaseDate = (t) =>
   t.release_year ? [t.release_year, t.release_month, t.release_day].filter(Boolean).map((n, i) => (i ? String(n).padStart(2, "0") : n)).join("-") : null;
@@ -453,34 +462,31 @@ const missingFrom = (want, got) => {
   });
 };
 
-// Lectura para leer-modificar-escribir: lee dos veces y solo da por buena la segunda si coincide con la primera.
-// Así el cambio se calcula sobre un estado recién leído y la ventana hasta el PUT es mínima. No es atómico:
-// SoundCloud no ofrece escritura condicional, así que una edición simultánea desde otra sesión o desde la web
-// justo entre esta lectura y el PUT se seguiría perdiendo.
-async function stableRead(pid, tries = 3) {
-  for (let i = 0; i < tries; i++) {
-    const a = await getPlaylistFull(pid);
-    assertComplete(a.p, a.hidden);
-    const b = await getPlaylistFull(pid);
-    assertComplete(b.p, b.hidden);
-    const idsB = b.tracks.map(rid);
-    if (sameSeq(a.tracks.map(rid), idsB)) return { p: b.p, tracks: b.tracks, ids: idsB };
-  }
-  throw new Error(
-    "The playlist keeps changing while it is being read (another SoundCrate session or the SoundCloud web or app is editing it), so nothing was changed. Try again in a moment."
-  );
+// Lectura para leer-modificar-escribir: una sola lectura, hecha dentro del cerrojo de la playlist, justo antes de
+// calcular el cambio. No es atómico: SoundCloud no ofrece escritura condicional, así que una edición simultánea desde
+// otra sesión o desde la web entre esta lectura y el PUT se pierde. (Una segunda lectura de comprobación costaba una
+// petición por escritura y apenas reducía esa ventana.) assertComplete impide escribir si la API oculta pistas.
+async function stableRead(pid) {
+  const a = await getPlaylistFull(pid);
+  assertComplete(a.p, a.hidden);
+  return { p: a.p, tracks: a.tracks, ids: a.tracks.map(rid) };
 }
 
-// No fiarse solo de la respuesta del PUT: puede omitir pistas (p. ej. blocked). Si no coincide con lo esperado,
-// se relee la playlist con access=...blocked y se decide con esa lectura.
+// No fiarse solo de la respuesta del PUT: puede omitir pistas (p. ej. blocked). Si cuadra con lo esperado no se
+// pide nada más; si no, se relee la playlist con access=...blocked y se decide con esa lectura. Si esa relectura
+// falla (429, timeout…) no se puede saber cómo quedó: se avisa sin restaurar y sin enmascarar el error original.
 async function confirmWrite(pid, resp, expected) {
   const got = (resp?.tracks || []).map(rid);
   if (sameMulti(got, expected)) return { ids: got, p: resp };
   try {
     const re = await getPlaylistFull(pid);
     return { ids: re.tracks.map(rid), p: re.p };
-  } catch {
-    return { ids: got, p: resp };
+  } catch (e) {
+    const err = new Error(
+      `The change was sent, but SoundCrate could not confirm the result (${String(e?.message || e)}). Nothing was restored. Check the playlist on SoundCloud.`
+    );
+    err.unconfirmed = true;
+    throw err;
   }
 }
 
@@ -503,7 +509,7 @@ async function failAndRestore(pid, original, reason, lastAfter) {
   if (!err && sameMulti(now, original)) throw new Error(`${reason} The previous track list was restored.`);
   const missing = [...new Set(missingFrom(original, now))];
   throw new Error(
-    `${reason} Restoring the previous track list FAILED (${err ? err.message : "SoundCloud still does not return the same tracks"}). ` +
+    `${reason} Restoring the previous track list FAILED (${err ? (err.unconfirmed ? "it was sent but its result could not be confirmed: " + err.message : err.message) : "SoundCloud still does not return the same tracks"}). ` +
       `Check the playlist on SoundCloud now. Original track ids, in order: ${original.join(",")}. ` +
       `Missing now: ${missing.length ? missing.join(",") : "unknown"}. Re-add the missing tracks; do not retry the same call blindly.`
   );
@@ -574,19 +580,61 @@ const tally = (xs) => xs.reduce((m, x) => ((m[x] = (m[x] || 0) + 1), m), {});
 const topN = (obj, n) => Object.fromEntries(Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n));
 
 const releaseKey = (t) => (t.release_year ? t.release_year * 10000 + (t.release_month || 0) * 100 + (t.release_day || 0) : null);
-// Orden "en zigzag" por la rueda: 1A 1B 2B 2A 3A 3B 4B 4A… Dentro de cada número va primero la letra por la que
-// se entra desde el número anterior (A en los impares, B en los pares), así cada paso entre números contiguos
-// conserva la letra (compatible según harmonicMatch). El orden "1A 1B 2A 2B…" cambia número y letra a la vez.
-const camelotKey = (t) => {
-  const k = camKey(camelot(t.key_signature));
-  if (!k) return null;
-  const first = k.n % 2 ? "A" : "B";
-  return k.n * 2 + (k.l === first ? 0 : 1);
-};
-const SORTS = { bpm: (t) => t.bpm || null, duration: (t) => t.duration || null, released: releaseKey, camelot: camelotKey };
+// Orden por la rueda Camelot. Los números van en orden (asc o desc) y dentro de cada uno va primero la letra que
+// enlaza con la última pista del número anterior (mismo número, o misma letra con número contiguo). Si el número
+// tiene las dos letras se elige, por programación dinámica, la entrada que menos choques deja en total (empates: A
+// primero en los impares y B en los pares, el zigzag 1A 1B 2B 2A…); si solo tiene una, esa. Nunca deja más choques
+// que el orden fijo "1A 1B 2A 2B…" de la 1.7.0, que es una de las combinaciones que se prueban.
+function camelotOrder(tracks, dir = "asc") {
+  const groups = new Map(); // número → { A: [pistas], B: [pistas] }
+  const rest = [];
+  tracks.forEach((t) => {
+    const k = camKey(camelot(t.key_signature));
+    if (!k) return rest.push(rid(t));
+    if (!groups.has(k.n)) groups.set(k.n, { A: [], B: [] });
+    groups.get(k.n)[k.l].push(rid(t));
+  });
+  const nums = [...groups.keys()].sort((a, b) => (dir === "desc" ? b - a : a - b));
+  const options = nums.map((n) => {
+    const g = groups.get(n);
+    const pref = n % 2 ? "A" : "B";
+    const other = pref === "A" ? "B" : "A";
+    const ls = ["A", "B"].filter((l) => g[l].length);
+    const orders = ls.length === 2 ? [[pref, other], [other, pref]] : [ls];
+    return orders.map((o, j) => ({ n, o, dev: ls.length === 2 ? j : 0 }));
+  });
+  const table = []; // table[i][j] = { cost, prev }: mejor coste hasta el número i acabando en la opción j
+  options.forEach((opts, idx) => {
+    table.push(
+      opts.map((op) => {
+        if (!idx) return { cost: op.dev, prev: -1 };
+        let best = null;
+        options[idx - 1].forEach((pv, pj) => {
+          const clash = harmonicMatch(`${pv.n}${pv.o[pv.o.length - 1]}`, `${op.n}${op.o[0]}`) === false ? 1000 : 0;
+          const cost = table[idx - 1][pj].cost + clash + op.dev;
+          if (!best || cost < best.cost) best = { cost, prev: pj };
+        });
+        return best;
+      })
+    );
+  });
+  const out = [];
+  if (nums.length) {
+    let j = table[nums.length - 1].reduce((bi, x, ix, arr) => (x.cost < arr[bi].cost ? ix : bi), 0);
+    const picked = [];
+    for (let idx = nums.length - 1; idx >= 0; idx--) {
+      picked[idx] = options[idx][j];
+      j = table[idx][j].prev;
+    }
+    picked.forEach((op) => op.o.forEach((l) => out.push(...groups.get(op.n)[l])));
+  }
+  return [...out, ...rest]; // las pistas sin clave van al final, en su orden original
+}
+const SORTS = { bpm: (t) => t.bpm || null, duration: (t) => t.duration || null, released: releaseKey };
 
 // Orden nuevo de las ids. Las pistas sin dato van al final, en su orden original.
 function sortIds(tracks, by, dir = "asc") {
+  if (by === "camelot") return camelotOrder(tracks, dir);
   const key = SORTS[by];
   if (!key) throw new Error("sort_by must be bpm, camelot, duration or released.");
   const sign = dir === "desc" ? -1 : 1;
@@ -762,7 +810,7 @@ async function buildStatus(verify) {
   const expired = !ready && lastSetupEnd?.reason === "timeout";
   return {
     ready,
-    ...(expired ? { setup_page_expired: "The setup page closed after 20 minutes without being finished. Call start_setup again to get a new one." } : {}),
+    ...(expired ? { setup_page_expired: `The setup page closed after ${Number.isFinite(lastSetupEnd.idle_minutes) ? `${lastSetupEnd.idle_minutes} minutes without activity` : "a while without activity"}. Call start_setup again to get a new one.` } : {}),
     ...(user ? { connected_as: user } : {}),
     platform: process.platform,
     node: process.version,
@@ -1126,7 +1174,7 @@ const TOOLS = {
     },
   },
   create_playlist: {
-    description: "Create a playlist. It is PRIVATE unless public=true.",
+    description: "Create a playlist. It is PRIVATE unless public=true. Entries of track_ids that are not track ids are skipped and listed in ignored_ids.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1138,7 +1186,8 @@ const TOOLS = {
       required: ["title"],
     },
     run: async ({ title, description, track_ids, public: pub = false }) => {
-      const wanted = [...new Set(ids(track_ids))];
+      const { ok, ignored } = splitIds(track_ids);
+      const wanted = [...new Set(ok)];
       if (list(track_ids).length && !wanted.length) throw new Error("track_ids must be an array of numeric track ids. Nothing was created.");
       const p = await sc(`/playlists`, {
         method: "POST",
@@ -1151,11 +1200,11 @@ const TOOLS = {
           },
         },
       });
-      return slimPlaylist(p);
+      return { ...slimPlaylist(p), ...ignoredNote(ignored) };
     },
   },
   add_tracks_to_playlist: {
-    description: "Append tracks to the end of a playlist without removing existing ones (duplicates are ignored).",
+    description: "Append tracks to the end of a playlist without removing existing ones (duplicates are ignored; entries that are not track ids are listed in ignored_ids).",
     inputSchema: {
       type: "object",
       properties: { playlist_id: { type: "string" }, track_ids: { type: "array", items: { type: "string" } } },
@@ -1164,11 +1213,12 @@ const TOOLS = {
     run: async ({ playlist_id, track_ids }) => {
       const pid = playlistId(playlist_id);
       return withPlaylistLock(pid, async () => {
-        const wanted = [...new Set(ids(track_ids))];
+        const { ok, ignored } = splitIds(track_ids);
+        const wanted = [...new Set(ok)];
         if (list(track_ids).length && !wanted.length) throw new Error("track_ids must be an array of numeric track ids. Nothing was changed.");
         const { ids: cur } = await stableRead(pid);
         const add = wanted.filter((x) => !cur.includes(x));
-        if (!add.length) return { added: 0, total: cur.length, note: "Nothing new to add." };
+        if (!add.length) return { added: 0, total: cur.length, note: "Nothing new to add.", ...ignoredNote(ignored) };
         const next = [...cur, ...add];
         const p = await putTracks(pid, next);
         const { ids: after } = await confirmWrite(pid, p, next);
@@ -1180,6 +1230,7 @@ const TOOLS = {
           added: add.filter((x) => after.includes(x)).length,
           not_accepted: add.filter((x) => !after.includes(x)),
           total: after.length,
+          ...ignoredNote(ignored),
         };
       });
     },
@@ -1200,7 +1251,7 @@ const TOOLS = {
   },
   remove_track_from_playlist: {
     description:
-      "Remove one track from a playlist. For several, use remove_tracks_from_playlist. If the track appears more than once, nothing is changed unless you pass position (1-based, removes only that copy) or all_copies true (removes every copy).",
+      "Remove one track from a playlist. For several, use remove_tracks_from_playlist. If the track appears more than once, nothing is changed unless you pass position (1-based, removes only that copy) or all_copies true (removes every copy); they cannot be combined.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1417,7 +1468,7 @@ const TOOLS = {
   },
   update_playlist: {
     description:
-      "Change a playlist's title, description, genre or tags and/or reorder its tracks: sort_by (bpm, camelot, duration or released, with direction asc/desc) or track_order with all its ids in the desired order. Never adds or removes tracks. Does not write if the API hides any track. If after writing it does not see the same set of tracks, it restores the previous order and reports it.",
+      "Change a playlist's title, description, genre or tags and/or reorder its tracks: sort_by (bpm, camelot, duration or released, with direction asc/desc; camelot goes number by number and, inside a number that has both letters, starts with the letter that mixes with the previous track, so it leaves as few harmonic clashes as possible, and tracks without a key go last) or track_order with all its ids in the desired order. Never adds or removes tracks. Does not write if the API hides any track. If after writing it does not see the same set of tracks, it restores the previous order and reports it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1425,7 +1476,7 @@ const TOOLS = {
         title: { type: "string" },
         description: { type: "string" },
         genre: { type: "string" },
-        tags: { type: "string", description: "Comma-separated tags, e.g. \"warm, deep house\"" },
+        tags: { type: "string", description: "Comma-separated tags, e.g. \"warm, deep house\" (a list is also accepted)" },
         sort_by: { type: "string", enum: ["bpm", "camelot", "duration", "released"] },
         direction: { type: "string", enum: ["asc", "desc"] },
         track_order: { type: "array", items: { type: "string" }, description: "All the playlist's ids, in the new order" },
@@ -1476,7 +1527,10 @@ const TOOLS = {
 
 async function removeTracks(playlist_id, track_ids, { position, allCopies = false } = {}) {
   const pid = playlistId(playlist_id);
-  const drop = new Set(ids(track_ids));
+  const split = splitIds(track_ids);
+  const drop = new Set(split.ok);
+  const ign = ignoredNote(split.ignored);
+  if (position != null && allCopies) throw new Error("position and all_copies cannot be used together: position removes one copy, all_copies removes every copy. Nothing was changed.");
   if (!drop.size) throw new Error("Provide at least one numeric track_id.");
   if (position != null && (!Number.isInteger(Number(position)) || Number(position) < 1)) throw new Error("position must be a whole number, 1 or more.");
   if (position != null && drop.size !== 1) throw new Error("position only works with a single track.");
@@ -1484,7 +1538,7 @@ async function removeTracks(playlist_id, track_ids, { position, allCopies = fals
     const { ids: cur } = await stableRead(pid);
     const found = [...drop].filter((x) => cur.includes(x));
     const not_found = [...drop].filter((x) => !cur.includes(x));
-    if (!found.length) return { removed: 0, not_found, total: cur.length, note: "None of those tracks were in the playlist." };
+    if (!found.length) return { removed: 0, not_found, total: cur.length, note: "None of those tracks were in the playlist.", ...ign };
     let next;
     if (position != null) {
       const at = Number(position) - 1;
@@ -1516,6 +1570,7 @@ async function removeTracks(playlist_id, track_ids, { position, allCopies = fals
       ...(not_found.length ? { not_found } : {}),
       ...(still.length ? { not_removed: still } : {}),
       total: after.length,
+      ...ign,
     };
   });
 }
@@ -1624,6 +1679,13 @@ function coerceArg(name, v, sch) {
     case "string": {
       if (typeof v === "string") return v;
       if (typeof v === "number" && Number.isFinite(v)) return String(v); // ids numéricos
+      if (Array.isArray(v)) {
+        // Una lista en un campo de texto (p. ej. tags:["dark","techno"]): se une. Los nulos se descartan.
+        const parts = v.filter((x) => x != null);
+        if (parts.every((x) => typeof x === "string" || (typeof x === "number" && Number.isFinite(x)))) {
+          return parts.map(String).join(name === "tags" ? ", " : " "); // tags: toTagList entrecomilla los que llevan espacios
+        }
+      }
       return bad("text");
     }
     case "array": {
@@ -1640,7 +1702,7 @@ function coerceArg(name, v, sch) {
       }
       if (!Array.isArray(arr)) return bad("a list (an array, or text like \"1,2\")");
       const it = sch.items || {};
-      return arr.map((x, i) => {
+      return arr.filter((x) => x !== null && x !== undefined).map((x, i) => {
         if (it.type === "string") {
           if (typeof x === "string") return x;
           if (typeof x === "number" && Number.isFinite(x)) return String(x);

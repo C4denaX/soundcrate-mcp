@@ -59,7 +59,7 @@ assert.equal(maxInFlight, 2, "playlists distintas en paralelo");
 // 3. Borrado por lotes: una sola escritura, conserva el orden, informa de lo que no estaba.
 puts = 0;
 let r = await call("remove_tracks_from_playlist", { playlist_id: "20", track_ids: ["2", "5", "5", "77", "x"] });
-assert.deepEqual(r.out, { removed: 2, not_found: ["77"], total: 4 });
+assert.deepEqual(r.out, { removed: 2, not_found: ["77"], total: 4, ignored_ids: ["x"] }); // ronda 2: los ids no válidos se informan
 assert.deepEqual(lists[20].tracks, [1, 3, 4, 6]); assert.equal(puts, 1, "una sola escritura");
 r = await call("remove_tracks_from_playlist", { playlist_id: "20", track_ids: ["77"] });
 assert.equal(r.out.removed, 0); assert.equal(puts, 1, "no escribe si no hay nada que quitar");

@@ -230,30 +230,29 @@ await tcase("#4 el PUT pide access=playable,preview,blocked", async () => {
   assert.ok(acc.includes("blocked") && acc.includes("playable") && acc.includes("preview"), "access=" + acc);
 });
 
-// #13
-await tcase("#13 una edición externa entre la lectura y la escritura no se pierde (se relee y se rehace)", async () => {
+// #13 (lectura única: una sola lectura fresca dentro del cerrojo; no hay escritura condicional en SoundCloud)
+await tcase("#13 la escritura parte de una lectura fresca: una edición externa anterior se conserva (1 GET + 1 PUT)", async () => {
+  reset([1, 2, 3, 4]);
+  list = [...list, "99"]; // otra sesión o la web añadió la 99 antes de que empiece la llamada
+  const r = await call("add_tracks_to_playlist", { playlist_id: "10", track_ids: ["5"] });
+  assert.equal(r.err, false, r.text);
+  assert.deepEqual(L(), [1, 2, 3, 4, 99, 5], "la 99 externa se conserva");
+  assert.equal(gets, 1, "una sola lectura");
+  assert.equal(puts.length, 1);
+});
+await tcase("#13 limitación conocida: una edición externa entre la lectura y el PUT se pisa (no hay escritura condicional)", async () => {
   reset([1, 2, 3, 4]);
   let fired = false;
   afterGet = () => {
     if (!fired) {
       fired = true;
-      list = [...list, "99"]; // otra sesión o la web añade la 99 justo después de nuestra lectura
+      list = [...list, "99"]; // llega después de nuestra lectura
     }
   };
   const r = await call("add_tracks_to_playlist", { playlist_id: "10", track_ids: ["5"] });
   assert.equal(r.err, false, r.text);
-  assert.deepEqual(L(), [1, 2, 3, 4, 99, 5], "la 99 externa se conserva");
-});
-await tcase("#13 si la playlist sigue cambiando, aborta sin escribir", async () => {
-  reset([1, 2, 3, 4]);
-  let n = 0;
-  afterGet = () => {
-    list = [...list, String(100 + n++)];
-  };
-  const r = await call("remove_tracks_from_playlist", { playlist_id: "10", track_ids: ["2"] });
-  assert.equal(r.err, true);
-  assert.match(r.text, /keeps changing/);
-  assert.equal(puts.length, 0, "no escribe sobre un estado que no se pudo estabilizar");
+  assert.deepEqual(L(), [1, 2, 3, 4, 5], "documentado: la 99 se pierde; el cerrojo solo ordena las llamadas de este proceso");
+  assert.equal(puts.length, 1, "sin reintentos ni bucles");
 });
 
 // #14
@@ -406,8 +405,8 @@ await tcase("T5 el cerrojo serializa la misma playlist dada como id y como URN",
     call("add_tracks_to_playlist", { playlist_id: "10", track_ids: ["7"] }),
     call("add_tracks_to_playlist", { playlist_id: "soundcloud:playlists:10", track_ids: ["8"] }),
     call("remove_tracks_from_playlist", { playlist_id: "soundcloud:playlists:10", track_ids: ["1"] }),
-    call("replace_track_in_playlist", { playlist_id: "10", old_track_id: "2", new_track_id: "20" }),
-    call("update_playlist", { playlist_id: "soundcloud:playlists:10", title: "T" }),
+    call("replace_track_in_playlist", { playlist_id: "soundcloud:playlists:10", old_track_id: "2", new_track_id: "20" }),
+    call("update_playlist", { playlist_id: "10", title: "T" }),
   ]);
   for (const r of rs) assert.equal(r.err, false, r.text);
   assert.equal(maxInFlight, 1, "nunca dos peticiones a la vez sobre la misma playlist");
