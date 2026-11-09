@@ -3,9 +3,12 @@
 // (--import existe desde Node 18.18/19.0, así que npm test necesita al menos ese Node; el servidor en sí solo
 // necesita Node >=18, por eso engines no cambia) y se propaga a los procesos hijos (server.mjs, login.mjs…)
 // mediante NODE_OPTIONS, que heredan.
-// Solo se permiten destinos locales: 127.0.0.1, localhost, ::1 (y *.localhost), 0.0.0.0 y :: (direcciones sin
-// especificar: sirven para escuchar, no enrutan a otro equipo), su forma IPv4-mapped (::ffff:127.0.0.1, que URL
-// normaliza a ::ffff:7f00:1) y las IP de las interfaces propias.
+// Solo se permiten destinos locales: 127.0.0.1, localhost, ::1 (y *.localhost), su forma IPv4-mapped
+// (::ffff:127.0.0.1, que URL normaliza a ::ffff:7f00:1) y las IP de las interfaces propias.
+// 0.0.0.0 y :: son direcciones sin especificar: como DESTINO de una conexión saliente pueden acabar en loopback,
+// pero también se enrutan de formas que no queremos permitir en las pruebas, así que se bloquean como cualquier
+// otra. La única excepción es dns.lookup("0.0.0.0"/"::"), que usa server.listen para un bind local y no genera
+// tráfico (resuelve un literal IP sin consultar DNS).
 // Huecos teóricos conocidos, fuera de lo que cubren las pruebas actuales:
 // - Procesos hijos que no son Node (curl, etc.): no quedan bloqueados; ninguna prueba lanza uno.
 // - worker_threads: el guard parchea módulos del hilo principal. NODE_OPTIONS se hereda, pero no hay prueba de que
@@ -21,7 +24,9 @@ import net from "node:net";
 import os from "node:os";
 import tls from "node:tls";
 
-const LOCAL = /^(127\.\d+\.\d+\.\d+|localhost|.*\.localhost|::1|0\.0\.0\.0|::)$/i;
+const LOCAL = /^(127\.\d+\.\d+\.\d+|localhost|.*\.localhost|::1)$/i;
+// Las direcciones sin especificar solo se admiten en dns.lookup (ver arriba), nunca como destino de una conexión.
+const UNSPECIFIED = new Set(["0.0.0.0", "::"]);
 // Las IP de las interfaces propias también cuentan como locales (test11 comprueba que el puerto NO responde ahí).
 const own = () => { try { return new Set(Object.values(os.networkInterfaces()).flat().map((i) => i.address)); } catch { return new Set(); } };
 // IPv4-mapped en forma decimal (::ffff:127.0.0.1) o hexadecimal (::ffff:7f00:1): las dos son 127.x.x.x.
@@ -102,6 +107,9 @@ dgram.createSocket = function (...a) {
 
 // DNS: resolver un nombre externo también es salir a la red (y delata el destino aunque luego se bloquee la conexión).
 const guardDns = (orig, name) => function (host, ...rest) {
+  // server.listen(port, "0.0.0.0" | "::") resuelve el literal por dns.lookup: no hay tráfico y es un bind local.
+  const literal = String(host ?? "").replace(/^\[|\]$/g, "");
+  if (name === "lookup" && UNSPECIFIED.has(literal)) return orig.call(this, host, ...rest);
   if (!isLocal(host)) throw blocked(`dns.${name}`, host);
   return orig.call(this, host, ...rest);
 };
