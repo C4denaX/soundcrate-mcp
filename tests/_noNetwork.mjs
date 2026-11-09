@@ -16,6 +16,8 @@
 // - dns.Resolver: las instancias tienen sus propios métodos (resolve*, reverse…), que no pasan por los parches del
 //   módulo dns.
 // - dns.reverse y dns.lookupService: no se parchean; pueden salir a la red sin resolver un nombre de destino.
+// - host "localhost" con una opción lookup propia: isLocal solo ve el nombre (localhost), no la IP que devuelve ese
+//   lookup, así que una conexión a localhost con un lookup que resuelva a otra IP podría salir fuera.
 import dns from "node:dns";
 import dgram from "node:dgram";
 import http from "node:http";

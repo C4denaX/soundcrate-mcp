@@ -397,9 +397,9 @@ Con `SC_SECRET_STORE=file`, borra el fichero `credentials.json`.
   se carga con `node --import`, así que para ejecutar las pruebas hace falta Node 18.18 o superior; el servidor en sí
   solo necesita Node 18. `npm run test:store` prueba el almacén real de tu sistema con una entrada desechable. La CI
   lo ejecuta todo en Linux, macOS y Windows con los almacenes reales.
-- `SC_NO_BROWSER=1` (también `true` o `yes`) evita que la página de configuración intente abrir un navegador; con
-  cualquier otro valor, incluidos `0` y `false`, sigue intentándolo. Las pruebas lo usan para ejecutar el `login.mjs`
-  real sin abrir nada.
+- `SC_NO_BROWSER=1` (también `true` o `yes`, sin distinguir mayúsculas y aunque lleve espacios alrededor) evita que
+  la página de configuración intente abrir un navegador; con cualquier otro valor, incluidos `0` y `false`, sigue
+  intentándolo. Las pruebas lo usan para ejecutar el `login.mjs` real sin abrir nada.
 - Distribución: `manifest.json` (extensión de Claude Desktop, empaquetada con `@anthropic-ai/mcpb`),
   `.claude-plugin/` + `.mcp.json` + `skills/` (plugin y marketplace de Claude), `bin` de `package.json` (npx).
 - Publicar una versión: sube la versión en `package.json`, `manifest.json`, `.claude-plugin/plugin.json` y

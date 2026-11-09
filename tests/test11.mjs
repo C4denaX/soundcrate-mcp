@@ -178,8 +178,9 @@ const good = (key, extra = {}) => ({ k: key, client_id: "abcdefgh123", client_se
     assert.ok(!fs.existsSync(marker), "ni siquiera se lanza xdg-open");
     assert.equal(await open({ PATH: dir, WAYLAND_DISPLAY: "wayland-0" }), true, "con Wayland");
     assert.equal(await open({ PATH: path.join(dir, "no"), DISPLAY: ":0" }), false, "xdg-open no instalado");
-    // Opt-out de pruebas: SC_NO_BROWSER no abre nada aunque haya navegador disponible. Vaciar PATH no basta para
-    // evitar que se abra en Windows (se sospecha que rundll32 se resuelve desde System32, sin comprobar allí).
+    // Opt-out de pruebas: SC_NO_BROWSER no abre nada aunque haya navegador disponible. No está comprobado en
+    // Windows si vaciar PATH basta para evitar que se abra: se sospecha que rundll32 se resuelve desde System32,
+    // pero no se ha verificado allí (por eso la prueba no depende solo de PATH).
     const marker2 = path.join(dir, "ran-no-browser");
     fake(`/usr/bin/touch ${marker2}; exit 0`);
     assert.equal(await open({ PATH: dir, DISPLAY: ":0", SC_NO_BROWSER: "1" }), false, "SC_NO_BROWSER desactiva la apertura");

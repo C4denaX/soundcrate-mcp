@@ -393,8 +393,9 @@ With `SC_SECRET_STORE=file`, delete `credentials.json` instead.
   HTTP, distribution files) under a no-network guard. The guard loads with `node --import`, so running the tests
   needs Node 18.18 or later; the server itself only needs Node 18. `npm run test:store` exercises your system's real
   secret store with a throwaway entry. CI runs everything on Linux, macOS and Windows against the real secret stores.
-- `SC_NO_BROWSER=1` (also `true` or `yes`) stops the setup page from trying to open a browser; any other value,
-  including `0` or `false`, leaves it enabled. The tests use it to run the real `login.mjs` without opening anything.
+- `SC_NO_BROWSER=1` (also `true` or `yes`, case-insensitive and ignoring surrounding spaces) stops the setup page
+  from trying to open a browser; any other value, including `0` or `false`, leaves it enabled. The tests use it to
+  run the real `login.mjs` without opening anything.
 - Distribution: `manifest.json` (Claude Desktop extension, packed with `@anthropic-ai/mcpb`),
   `.claude-plugin/` + `.mcp.json` + `skills/` (Claude plugin and marketplace), `package.json` `bin` (npx).
 - Releasing: bump the version in `package.json`, `manifest.json`, `.claude-plugin/plugin.json` and `server.mjs`,
