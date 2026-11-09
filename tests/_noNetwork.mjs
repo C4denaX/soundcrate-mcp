@@ -16,8 +16,10 @@
 // - dns.Resolver: las instancias tienen sus propios métodos (resolve*, reverse…), que no pasan por los parches del
 //   módulo dns.
 // - dns.reverse y dns.lookupService: no se parchean; pueden salir a la red sin resolver un nombre de destino.
-// - host "localhost" con una opción lookup propia: isLocal solo ve el nombre (localhost), no la IP que devuelve ese
-//   lookup, así que una conexión a localhost con un lookup que resuelva a otra IP podría salir fuera.
+// - lookup propio en conexiones TCP/TLS/HTTP: cubierto cuando el destino pasa por net.Socket.prototype.connect con las
+//   opciones como objeto (net.connect, new net.Socket().connect, createConnection, tls.connect, http(s).request/get);
+//   quedan fuera sockets que no usen ese camino (p. ej. un Agent personalizado que cree el socket con otra vía) y el
+//   caso de un lookup que devuelva la IP local correcta pero luego se redirija a nivel de red (fuera del alcance).
 import dns from "node:dns";
 import dgram from "node:dgram";
 import http from "node:http";
@@ -86,12 +88,44 @@ for (const [mod, name] of [[net, "connect"], [net, "createConnection"], [tls, "c
     return orig.apply(this, a);
   };
 }
-// new net.Socket().connect(...) no pasa por net.connect: mismo filtro en el prototipo.
+// new net.Socket().connect(...) no pasa por net.connect: mismo filtro en el prototipo. Por aquí acaban también
+// net.connect, net.createConnection, tls.connect (TLSSocket hereda de net.Socket) y el Agent de http(s).
+// isLocal solo ve el NOMBRE del destino; un host local (localhost, foo.localhost) con una opción lookup propia podría
+// resolverse a una IP externa. Por eso, en connect, el lookup (el propio, o dns.lookup si el destino es un nombre y no
+// un literal IP) se sustituye por un envoltorio que aplica isLocal a CADA dirección resuelta, en las dos formas del
+// callback: (err, address, family) y, con all:true (autoSelectFamily), (err, [{address, family}]). Si alguna no es
+// local se devuelve el error blocked() por el callback y no se abre ninguna conexión. Las opciones del llamante no se
+// mutan (se copian).
+const lookupGuard = (host, base) => function (hostname, opts, cb) {
+  if (typeof opts === "function") { cb = opts; opts = {}; }
+  return base.call(this, hostname, opts, function (err, addr, ...more) {
+    if (!err) {
+      const list = Array.isArray(addr) ? addr.map((x) => x.address) : [addr];
+      const bad = list.find((ip) => !isLocal(ip));
+      if (bad !== undefined) return cb.call(this, blocked("socket.lookup (resuelto)", `${host} -> ${bad}`));
+    }
+    return cb.call(this, err, addr, ...more);
+  });
+};
+const withGuardedLookup = (a) => {
+  // Internamente net.connect llama a socket.connect(argsNormalizados), con las opciones en args[0][0] (el array lleva
+  // un símbolo de "normalizado": se copia entero). Desde fuera, las opciones vienen en a[0] como objeto.
+  const norm = Array.isArray(a[0]);
+  const o = norm ? a[0][0] : a[0];
+  if (!o || typeof o !== "object" || o instanceof URL) return a;
+  const host = o.host ?? "localhost";
+  if (typeof o.lookup !== "function" && (typeof host !== "string" || net.isIP(host.replace(/^\[|\]$/g, "")))) return a; // literal IP: sin lookup
+  const opts = { ...o, lookup: lookupGuard(host, typeof o.lookup === "function" ? o.lookup : (...x) => dns.lookup(...x)) };
+  if (!norm) return [opts, ...a.slice(1)];
+  const arr = Object.assign([], a[0]);
+  arr[0] = opts;
+  return [arr, ...a.slice(1)];
+};
 const sockConnect = net.Socket.prototype.connect;
 net.Socket.prototype.connect = function (...a) {
   const h = hostArg(a);
   if (!isLocal(h)) throw blocked("socket.connect", h);
-  return sockConnect.apply(this, a);
+  return sockConnect.apply(this, withGuardedLookup(a));
 };
 
 // UDP (dgram): send(msg[, offset, length,] port[, address][, cb]); sin address el destino es localhost.

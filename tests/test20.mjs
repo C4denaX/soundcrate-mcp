@@ -9,6 +9,8 @@
 import assert from "node:assert/strict";
 import net from "node:net";
 import dgram from "node:dgram";
+import http from "node:http";
+import tls from "node:tls";
 import dns from "node:dns";
 import { spawnSync } from "node:child_process";
 import * as guard from "./_noNetwork.mjs";
@@ -161,6 +163,61 @@ import * as guard from "./_noNetwork.mjs";
     closeQuiet(d);
   }
 
+  // Ronda 7 (R7-2): host local + opción lookup propia que resuelve a 192.0.2.1 (TEST-NET-1). isLocal solo veía el
+  // nombre; el guard envuelve el lookup y comprueba cada IP resuelta, en la forma normal y en la de all:true. No debe
+  // haber intento de conexión ('connectionAttempt'/'connect') ni petición; solo el error BLOQUEADA.
+  {
+    const mkLookup = (ip) => (h, o, cb) => process.nextTick(() => (o && o.all ? cb(null, [{ address: ip, family: 4 }]) : cb(null, ip, 4)));
+    const watch = (sock, st) => {
+      sock.on("connectionAttempt", () => { st.attempt = true; });
+      sock.on("connect", () => { st.attempt = true; });
+      sock.on("error", (e) => { st.err ??= e; });
+    };
+    const viaNet = (opts) => { const st = {}; try { watch(net.connect(opts), st); } catch (e) { st.err = e; } return st; };
+    const viaSocket = (opts) => { const st = {}; const k = new net.Socket(); watch(k, st); try { k.connect(opts); } catch (e) { st.err = e; } st.sock = k; return st; };
+    const viaTls = (opts) => { const st = {}; try { watch(tls.connect({ ...opts, rejectUnauthorized: false }), st); } catch (e) { st.err = e; } return st; };
+    const viaHttp = (opts) => {
+      const st = {};
+      try {
+        const req = http.request({ ...opts, agent: false });
+        req.on("error", (e) => { st.err ??= e; });
+        req.on("socket", (sk) => watch(sk, st));
+        req.end();
+      } catch (e) { st.err = e; }
+      return st;
+    };
+    for (const [name, fn] of [["net.connect", viaNet], ["new net.Socket().connect", viaSocket], ["tls.connect", viaTls], ["http.request", viaHttp]]) {
+      for (const host of ["localhost", "foo.localhost"]) {
+        for (const all of [false, true]) {
+          const optsOrig = { host, port: 9, lookup: mkLookup("192.0.2.1"), autoSelectFamily: all };
+          const copy = { ...optsOrig };
+          const st = fn(optsOrig);
+          await sleep(300);
+          const label = `${name} a ${host} con lookup propio -> 192.0.2.1 (autoSelectFamily:${all})`;
+          assert.match(st.err?.message ?? "", /BLOQUEADA/, `${label} debe bloquearse`);
+          assert.ok(!st.attempt, `${label}: no debe haber intento de conexión`);
+          assert.deepEqual(optsOrig, copy, `${label}: no se mutan las opciones del llamante`);
+          try { st.sock?.destroy(); } catch {}
+        }
+      }
+    }
+  }
+
+  // all:true con varias direcciones: la primera es local y la segunda no; basta una no local para bloquear.
+  {
+    const mixed = (h, o, cb) => process.nextTick(() => cb(null, [{ address: "127.0.0.1", family: 4 }, { address: "192.0.2.1", family: 4 }]));
+    for (const host of ["localhost", "foo.localhost"]) {
+      const k = net.connect({ host, port: 9, lookup: mixed, autoSelectFamily: true });
+      const st = {};
+      k.on("connectionAttempt", () => { st.attempt = true; });
+      k.on("error", (e) => { st.err ??= e; });
+      await sleep(300);
+      assert.match(st.err?.message ?? "", /BLOQUEADA/, `lookup all:true con [127.0.0.1, 192.0.2.1] a ${host} debe bloquearse`);
+      assert.ok(!st.attempt, `lookup mixto a ${host}: no debe haber intento de conexión`);
+      k.destroy();
+    }
+  }
+
   guard.noNetworkReset?.(); // los bloqueos de arriba son intencionales
   // Positivos (tras el reset: cualquier bloqueo a partir de aquí hace fallar la suite al salir)
   for (const [type, host] of [["udp4", "0.0.0.0"], ...(r6 ? [["udp6", "::"]] : [])]) {
@@ -176,6 +233,22 @@ import * as guard from "./_noNetwork.mjs";
     assert.ok(rc.got.includes("ok"), `send tras connect a ${host} sigue llegando al receptor local`);
     rc.got.length = 0;
     closeQuiet(u);
+  }
+  // Positivo: lookup propio que resuelve a 127.0.0.1 sigue funcionando (servidor local, puerto efímero).
+  {
+    const srv = net.createServer((c) => { c.on("error", () => {}); c.end(); });
+    await new Promise((res) => srv.listen(0, "127.0.0.1", res));
+    const port = srv.address().port;
+    for (const host of ["localhost", "foo.localhost"]) {
+      for (const all of [false, true]) {
+        const lk = (h, o, cb) => process.nextTick(() => (o && o.all ? cb(null, [{ address: "127.0.0.1", family: 4 }]) : cb(null, "127.0.0.1", 4)));
+        await new Promise((res, rej) => {
+          const c = net.connect({ host, port, lookup: lk, autoSelectFamily: all }, () => { c.destroy(); res(); });
+          c.on("error", rej);
+        });
+      }
+    }
+    await new Promise((res) => srv.close(res));
   }
   closeQuiet(r4.r); if (r6) closeQuiet(r6.r);
 
