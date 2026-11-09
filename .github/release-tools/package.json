@@ -1,0 +1,8 @@
+{
+  "name": "soundcrate-release-tools",
+  "private": true,
+  "description": "Tooling used only by CI to validate and pack the .mcpb. Pinned by package-lock.json (install with npm ci).",
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  }
+}

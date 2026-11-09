@@ -114,11 +114,11 @@
     },
     {
       "name": "replace_track_in_playlist",
-      "description": "Replace a track with another at the same position (e.g."
+      "description": "Replace a track with another at the same position, e.g. a user upload with its official release."
     },
     {
       "name": "suggest_tracks",
-      "description": "From 1 to 5 seed tracks, gathers their SoundCloud related tracks, removes duplicates, the seeds and anything already in exclude_playlist_id, applies BPM, dur…"
+      "description": "Suggest tracks from 1 to 5 seeds: merges their related tracks, filters by BPM, duration and genre, and ranks them. Writes nothing."
     },
     {
       "name": "find_official_version",
@@ -126,11 +126,11 @@
     },
     {
       "name": "analyze_playlist",
-      "description": "Summary of a playlist for planning: total duration, BPM (min, median, max), Camelot keys, genres, years, duplicate tracks, BPM jumps above 6 and harmonic cla…"
+      "description": "Summarize a playlist for planning: duration, BPM, Camelot keys, genres, duplicates, BPM jumps and harmonic clashes. Read-only."
     },
     {
       "name": "update_playlist",
-      "description": "Change a playlist's title, description, genre or tags and/or reorder its tracks: sort_by (bpm, camelot, duration or released, with direction asc/desc) or tra…"
+      "description": "Change a playlist's title, description, genre or tags and/or reorder its tracks by BPM, key, duration or release date. Never adds or removes tracks."
     }
   ],
   "tools_generated": false,
