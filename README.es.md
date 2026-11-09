@@ -392,9 +392,11 @@ Con `SC_SECRET_STORE=file`, borra el fichero `credentials.json`.
 - Habla MCP 2024-11-05 a 2025-11-25 (`initialize`) y 2026-07-28 (sin estado, `server/discover`).
 - Las descripciones de las herramientas están en inglés, por debajo de 1.024 caracteres y con esquemas planos que
   aceptan OpenAI, Gemini y los modelos locales.
-- `npm test` ejecuta trece baterías sin red (protocolo con un proceso stdio real, almacenes de secretos, la página
-  de configuración con HTTP real, ficheros de distribución). `npm run test:store` prueba el almacén real de tu
-  sistema con una entrada desechable. La CI lo ejecuta todo en Linux, macOS y Windows con los almacenes reales.
+- `npm test` ejecuta veinte baterías sin red (protocolo con un proceso stdio real, almacenes de secretos, la página
+  de configuración con HTTP real, ficheros de distribución) bajo un guard que impide toda conexión externa. El guard
+  se carga con `node --import`, así que para ejecutar las pruebas hace falta Node 18.18 o superior; el servidor en sí
+  solo necesita Node 18. `npm run test:store` prueba el almacén real de tu sistema con una entrada desechable. La CI
+  lo ejecuta todo en Linux, macOS y Windows con los almacenes reales.
 - Distribución: `manifest.json` (extensión de Claude Desktop, empaquetada con `@anthropic-ai/mcpb`),
   `.claude-plugin/` + `.mcp.json` + `skills/` (plugin y marketplace de Claude), `bin` de `package.json` (npx).
 - Publicar una versión: sube la versión en `package.json`, `manifest.json`, `.claude-plugin/plugin.json` y

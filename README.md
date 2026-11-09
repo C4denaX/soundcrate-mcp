@@ -389,9 +389,10 @@ With `SC_SECRET_STORE=file`, delete `credentials.json` instead.
 - Speaks MCP 2024-11-05 to 2025-11-25 (`initialize`) and 2026-07-28 (stateless, `server/discover`).
 - Tool descriptions are in English, under 1,024 characters, with flat schemas that OpenAI, Gemini and local
   models accept.
-- `npm test` runs thirteen offline suites (protocol over a real stdio process, secret stores, the setup page over real
-  HTTP, distribution files). `npm run test:store` exercises your system's real secret store with a throwaway
-  entry. CI runs everything on Linux, macOS and Windows against the real secret stores.
+- `npm test` runs twenty offline suites (protocol over a real stdio process, secret stores, the setup page over real
+  HTTP, distribution files) under a no-network guard. The guard loads with `node --import`, so running the tests
+  needs Node 18.18 or later; the server itself only needs Node 18. `npm run test:store` exercises your system's real
+  secret store with a throwaway entry. CI runs everything on Linux, macOS and Windows against the real secret stores.
 - Distribution: `manifest.json` (Claude Desktop extension, packed with `@anthropic-ai/mcpb`),
   `.claude-plugin/` + `.mcp.json` + `skills/` (Claude plugin and marketplace), `package.json` `bin` (npx).
 - Releasing: bump the version in `package.json`, `manifest.json`, `.claude-plugin/plugin.json` and `server.mjs`,
