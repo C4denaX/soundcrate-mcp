@@ -507,7 +507,8 @@ async function failAndRestore(pid, original, reason, lastAfter) {
     }
   }
   if (!err && sameMulti(now, original)) throw new Error(`${reason} The previous track list was restored.`);
-  const missing = [...new Set(missingFrom(original, now))];
+  // Si el PUT de restauración se envió pero no se pudo confirmar, `now` es la lista anterior a él: no se sabe qué falta.
+  const missing = err?.unconfirmed ? [] : [...new Set(missingFrom(original, now))];
   throw new Error(
     `${reason} Restoring the previous track list FAILED (${err ? (err.unconfirmed ? "it was sent but its result could not be confirmed: " + err.message : err.message) : "SoundCloud still does not return the same tracks"}). ` +
       `Check the playlist on SoundCloud now. Original track ids, in order: ${original.join(",")}. ` +
@@ -810,7 +811,7 @@ async function buildStatus(verify) {
   const expired = !ready && lastSetupEnd?.reason === "timeout";
   return {
     ready,
-    ...(expired ? { setup_page_expired: `The setup page closed after ${Number.isFinite(lastSetupEnd.idle_minutes) ? `${lastSetupEnd.idle_minutes} minutes without activity` : "a while without activity"}. Call start_setup again to get a new one.` } : {}),
+    ...(expired ? { setup_page_expired: `The setup page closed after ${Number.isFinite(lastSetupEnd.idle_minutes) ? `${lastSetupEnd.idle_minutes} ${lastSetupEnd.idle_minutes === 1 ? "minute" : "minutes"} without activity` : "a while without activity"}. Call start_setup again to get a new one.` } : {}),
     ...(user ? { connected_as: user } : {}),
     platform: process.platform,
     node: process.version,
@@ -1702,13 +1703,14 @@ function coerceArg(name, v, sch) {
       }
       if (!Array.isArray(arr)) return bad("a list (an array, or text like \"1,2\")");
       const it = sch.items || {};
-      return arr.filter((x) => x !== null && x !== undefined).map((x, i) => {
+      return arr.flatMap((x, i) => {
+        if (x === null || x === undefined) return []; // los nulos se descartan; "item N" cuenta la posición original
         if (it.type === "string") {
-          if (typeof x === "string") return x;
-          if (typeof x === "number" && Number.isFinite(x)) return String(x);
+          if (typeof x === "string") return [x];
+          if (typeof x === "number" && Number.isFinite(x)) return [String(x)];
           throw new Error(`Argument "${name}": item ${i + 1} must be text or a number, got ${shown(x)}.`);
         }
-        return x;
+        return [x];
       });
     }
     default:

@@ -207,6 +207,7 @@ tcase("confirmWrite: replace con la relectura caída tampoco restaura", async ()
 tcase("#21 setup_status usa idle_minutes en el aviso de caducidad (y un texto sin número si no viene)", async () => {
   for (const [res, expect] of [
     [{ ok: false, reason: "timeout", idle_minutes: 45 }, /after 45 minutes without activity/],
+    [{ ok: false, reason: "timeout", idle_minutes: 1 }, /after 1 minute without activity/],
     [{ ok: false, reason: "timeout" }, /closed after a while without activity/],
   ]) {
     const S = await import(`../server.mjs?r2-s-${++nInst}`);
@@ -230,6 +231,21 @@ tcase("#21 setup_status usa idle_minutes en el aviso de caducidad (y un texto si
 });
 
 // ----- #5 coerción -----
+tcase("#5 el «item N» de un error de lista cuenta la posición original aunque haya nulos antes", async () => {
+  const { call } = await boot([1, 2]);
+  const r = await call("add_tracks_to_playlist", { playlist_id: "10", track_ids: [null, "5", { a: 1 }] });
+  assert.equal(r.err, true);
+  assert.match(r.text, /item 3 must be text or a number/);
+});
+tcase("failAndRestore: si el PUT de restauración no se puede confirmar, «Missing now» no usa la lista obsoleta", async () => {
+  const { st, call } = await boot([1, 2, 3]);
+  st.putPlan = [{ drop: ["2"] }, { drop: ["2"] }, { drop: ["2"] }]; // la escritura y los dos intentos de restauración pierden la 2
+  st.failGetsFrom = 3; // la lectura y la 1.ª relectura van bien (→ failAndRestore); la relectura tras restaurar da 429
+  const r = await call("add_tracks_to_playlist", { playlist_id: "10", track_ids: ["9"] });
+  assert.equal(r.err, true);
+  assert.match(r.text, /FAILED/, r.text);
+  assert.match(r.text, /Missing now: unknown/, r.text);
+});
 tcase("#5 update_playlist acepta tags como lista (y entrecomilla los que llevan espacios)", async () => {
   const { st, call } = await boot([1, 2]);
   const r = await call("update_playlist", { playlist_id: "10", tags: ["dark", "minimal techno", 7] });
