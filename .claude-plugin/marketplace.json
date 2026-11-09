@@ -1,6 +1,6 @@
 {
   "name": "soundcrate",
-  "description": "SoundCrate: SoundCloud playlists curated by your AI assistant.",
+  "description": "SoundCrate: SoundCloud MCP server to search, build and sort playlists with your AI assistant.",
   "owner": {
     "name": "Sergio Ruiz",
     "url": "https://github.com/C4denaX"
@@ -9,9 +9,9 @@
     {
       "name": "soundcrate",
       "source": "./",
-      "description": "Dig, curate and reorder your SoundCloud playlists from Claude, with guided setup.",
+      "description": "SoundCloud MCP server: search tracks, build private playlists and sort them by BPM or Camelot key from Claude, with guided setup.",
       "category": "music",
-      "tags": ["soundcloud", "playlists", "dj"]
+      "tags": ["soundcloud", "mcp", "playlists", "dj", "bpm", "camelot"]
     }
   ]
 }

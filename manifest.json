@@ -3,8 +3,8 @@
   "name": "soundcrate",
   "display_name": "SoundCrate",
   "version": "1.7.0",
-  "description": "Dig, curate and reorder your SoundCloud playlists by talking to Claude.",
-  "long_description": "SoundCrate connects Claude to your own SoundCloud account. Search tracks by genre, BPM or upload date (every result shows its key); get related tracks and artists; create private playlists; and analyze or reorder them by BPM or harmonic key (Camelot). Everything runs on your computer: your credentials stay in the system secret store and setup happens on a local page, never in the chat. After installing, ask Claude: \"Help me set up SoundCrate\". Requires a SoundCloud app, which needs a SoundCloud Artist Pro plan. Creating the app means accepting SoundCloud's API terms: section 03 forbids using API content as input to AI, and SoundCloud can revoke access without notice, so you use SoundCrate at your own responsibility. Not affiliated with SoundCloud.",
+  "description": "SoundCloud MCP server for Claude: search tracks, build private playlists and sort them by BPM or Camelot key.",
+  "long_description": "SoundCrate is a SoundCloud MCP server that connects Claude to your own SoundCloud account. Search tracks by genre, BPM or upload date (every result shows its key); get related tracks and artists; create private playlists; and analyze or reorder them by BPM or harmonic key (Camelot). Everything runs on your computer: your credentials stay in the system secret store and setup happens on a local page, never in the chat. After installing, ask Claude: \"Help me set up SoundCrate\". Requires a SoundCloud app, which needs a SoundCloud Artist Pro plan. Creating the app means accepting SoundCloud's API terms: section 03 forbids using API content as input to AI, and SoundCloud can revoke access without notice, so you use SoundCrate at your own responsibility. Not affiliated with SoundCloud.",
   "author": {
     "name": "Sergio Ruiz",
     "url": "https://github.com/C4denaX"
@@ -142,7 +142,9 @@
     "dj",
     "bpm",
     "camelot",
-    "mcp"
+    "harmonic-mixing",
+    "mcp",
+    "playlist-ai"
   ],
   "license": "MIT",
   "privacy_policies": [

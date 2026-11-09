@@ -1,7 +1,7 @@
 {
   "name": "soundcrate-mcp",
   "version": "1.7.0",
-  "description": "SoundCloud playlists, curated by any AI agent. Local, zero-dependency, cross-platform MCP server (stdio) for Claude, OpenCode, Cursor, VS Code, Codex, Gemini CLI and any other MCP client.",
+  "description": "SoundCloud MCP server: let Claude or any AI assistant search tracks, build private playlists and sort them by BPM or Camelot key. Local, zero-dependency, cross-platform (stdio), for Claude, Cursor, VS Code, OpenCode, Codex and Gemini CLI.",
   "type": "module",
   "main": "server.mjs",
   "bin": {
@@ -30,18 +30,26 @@
     "test:store": "node tests/store-live.mjs"
   },
   "keywords": [
+    "ai-assistant",
+    "bpm",
     "camelot",
     "claude",
+    "claude-desktop",
     "codex",
     "cursor",
     "dj",
+    "dj-tools",
     "gemini-cli",
+    "harmonic-mixing",
     "mcp",
     "mcp-server",
     "model-context-protocol",
     "opencode",
+    "playlist",
     "playlists",
     "soundcloud",
+    "soundcloud-api",
+    "soundcloud-mcp",
     "vscode"
   ],
   "license": "MIT",

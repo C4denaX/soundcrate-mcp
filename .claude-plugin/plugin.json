@@ -2,7 +2,7 @@
   "name": "soundcrate",
   "displayName": "SoundCrate",
   "version": "1.7.0",
-  "description": "Dig, curate and reorder your SoundCloud playlists: search by genre, BPM or upload date, find related tracks and artists, build private playlists and order them by BPM or Camelot key. Runs locally; guided setup.",
+  "description": "SoundCloud MCP server for Claude: search tracks by genre, BPM or upload date, find related tracks and artists, build private playlists and sort them by BPM or Camelot key. Runs locally; guided setup.",
   "author": {
     "name": "Sergio Ruiz",
     "url": "https://github.com/C4denaX"
@@ -10,7 +10,7 @@
   "homepage": "https://github.com/C4denaX/soundcrate-mcp",
   "repository": "https://github.com/C4denaX/soundcrate-mcp",
   "license": "MIT",
-  "keywords": ["soundcloud", "playlists", "music", "dj", "bpm", "camelot"],
+  "keywords": ["soundcloud", "mcp", "mcp-server", "playlists", "music", "dj", "bpm", "camelot", "harmonic-mixing"],
   "icon": "./icon.png",
   "documentationUrl": "https://github.com/C4denaX/soundcrate-mcp#readme",
   "supportUrl": "https://github.com/C4denaX/soundcrate-mcp/issues",

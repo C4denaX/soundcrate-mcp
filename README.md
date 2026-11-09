@@ -1,6 +1,6 @@
-<p align="center"><img src="icon.png" width="112" alt="SoundCrate icon"></p>
+<p align="center"><img src="icon.png" width="112" alt="SoundCrate, a SoundCloud MCP server for Claude"></p>
 
-<h1 align="center">SoundCrate</h1>
+<h1 align="center">SoundCrate: SoundCloud MCP server for Claude and other AI assistants</h1>
 
 <p align="center"><b>Dig through SoundCloud and shape your playlists by talking to your AI assistant.</b></p>
 
@@ -11,10 +11,10 @@
 <br><a href="README.es.md">Leer en español</a>
 </p>
 
-SoundCrate connects Claude (or any other AI assistant that supports [MCP](https://modelcontextprotocol.io)) to
-**your own SoundCloud account**. Ask in plain words and it searches tracks by genre, tags, tempo, duration or upload
-date (every result shows its key, so you can ask for compatible ones), finds similar tracks and artists, builds
-private playlists and puts them in a DJ-friendly order.
+SoundCrate is a SoundCloud MCP server. It connects Claude (or any other AI assistant that supports
+[MCP](https://modelcontextprotocol.io)) to **your own SoundCloud account**. Ask in plain words and it searches tracks
+by genre, tags, tempo, duration or upload date (every result shows its key, so you can ask for compatible ones),
+finds similar tracks and artists, builds private playlists and sorts them for DJ sets by BPM or Camelot key.
 
 > "Find techno between 128 and 132 BPM uploaded this year and make me a private two-hour playlist in compatible keys."
 >
@@ -41,7 +41,7 @@ It runs on your computer, keeps your credentials in your system's secure storage
 > own responsibility. The setup page shows this notice in step 1 and suggests the app description *Local AI
 > assistant to manage my own playlists* (in Spanish if your browser is in Spanish); describe your app honestly.
 
-## Install
+## Install the SoundCloud MCP server
 
 ### Claude Desktop (easiest, no technical knowledge needed)
 
@@ -61,7 +61,7 @@ Type this in Claude Code:
 /plugin install soundcrate --marketplace C4denaX/soundcrate-mcp
 ```
 
-Or just ask: *"Install the SoundCrate plugin from the C4denaX/soundcrate-mcp marketplace."* Then say
+Or ask: *"Install the SoundCrate plugin from the C4denaX/soundcrate-mcp marketplace."* Then say
 **Help me set up SoundCrate**. Requires Node.js 18 or later.
 
 ### Cowork
@@ -75,14 +75,14 @@ In Claude Desktop, open **Customize > Plugins**, add the marketplace `C4denaX/so
 
 ### VS Code
 
-[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_SoundCrate-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522soundcrate%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522github%253AC4denaX%252Fsoundcrate-mcp%2523v1.7.0%2522%255D%257D)
+[![Install the SoundCrate SoundCloud MCP server in VS Code](https://img.shields.io/badge/VS_Code-Install_SoundCrate-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522soundcrate%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522github%253AC4denaX%252Fsoundcrate-mcp%2523v1.7.0%2522%255D%257D)
 
 Click the button, review the server and install it. Needs Node.js and Git. To declare Go+, add
 `"env": { "SC_GO_PLUS": "1" }` to the server in your `mcp.json`.
 
 ### Other apps
 
-Every MCP app needs the same thing: a **stdio** server started with `npx -y github:C4denaX/soundcrate-mcp#v1.7.0`
+Every MCP app needs a **stdio** server started with `npx -y github:C4denaX/soundcrate-mcp#v1.7.0`
 (needs Node.js and Git), plus `SC_GO_PLUS=1` if you have Go+. Pick your app:
 
 <details>
@@ -195,15 +195,15 @@ step. When it's time, it opens a setup page in your browser. The page lives only
    change the Client ID later, you have to connect again (step 3).
 3. **Click "Connect with SoundCloud"** and authorize the app.
 
-That's it. Your secrets never pass through the chat or the AI model. The page closes when you finish, when you
-close the app, or after 60 minutes since your last action on the page (the page shows until what time it stays open; if it expires,
-ask for the setup again: the assistant gets a new link, and `setup_status` says the page expired). If SoundCloud
-sends you back with an error, the page tells you to return to the setup tab or ask for a new page. The page
-usually opens by itself, but that is only a hint: the assistant always gives you the link too.
+Your secrets never pass through the chat or the AI model. The page closes when you finish, when you close the app,
+or 60 minutes after your last action on it, and it shows the time it will close. If it expires, ask for the
+setup again: the assistant gets a new link, and `setup_status` says the page expired. If SoundCloud sends you back
+with an error, the page tells you to return to the setup tab or ask for a new page. The page usually opens by itself,
+but that is only a hint: the assistant always gives you the link too.
 
-Prefer the terminal? `npx -y -p github:C4denaX/soundcrate-mcp#v1.7.0 soundcrate-login` opens the same page.
+From the terminal, `npx -y -p github:C4denaX/soundcrate-mcp#v1.7.0 soundcrate-login` opens the same page.
 
-## What you can ask
+## What you can ask your assistant to do
 
 - **Discover:** "Tracks similar to this one", "What have the DJs I follow reposted this month?", "Artists like
   Amelie Lens and their latest uploads", "Search playlists of melodic techno".
@@ -219,9 +219,8 @@ date, but the key and release date of every result are shown.
 **Camelot order.** Sorting by key puts the numbers in order (ascending or descending). When a number has both
 letters, it starts with the one that mixes with the previous track, choosing the combination with the fewest
 clashes (never more than the plain 1A 1B 2A 2B order); on a tie it zigzags 1A 1B 2B 2A…. Tracks without a key go
-last. Keys that mix well are the same code, the
-relative key (same number, other letter) and the neighbours (one number up or down, same letter). Skipping a
-number that isn't in the playlist counts as a clash.
+last. Keys that mix well are the same code, the relative key (same number, other letter) and the neighbours (one
+number up or down, same letter). Skipping a number that isn't in the playlist counts as a clash.
 
 ## Good to know
 
@@ -257,9 +256,11 @@ number that isn't in the playlist counts as a clash.
   tags).
 - Removing a track that appears several times needs a `position` or `all_copies` (not both); otherwise nothing
   changes.
-- Entries in `track_ids` that are not track ids are skipped and listed in `ignored_ids` (create, add, remove). If no valid id is left, nothing is done and an error is returned
-  (without `ignored_ids`). A `track_ids` list (or text like `"1,2"`) with entries but none valid, including text made only of commas or blanks, is that same error. To create a playlist without tracks, leave `track_ids` out or pass an empty list (`[]` or `""`).
-  `tags` accepts a list.
+- Entries in `track_ids` that are not track ids are skipped and listed in `ignored_ids` (create, add, remove). If no
+  valid id is left, nothing is done and an error is returned (without `ignored_ids`). A `track_ids` list (or text
+  like `"1,2"`) with entries but none valid, including text made only of commas or blanks, gives that same error.
+  To create a playlist without tracks, leave `track_ids` out or pass an empty list (`[]` or `""`). `tags` accepts
+  a list.
 - Write tools are marked as such, so apps that support it ask you before changing a playlist.
 
 ## Go+ and what you can listen to
@@ -351,7 +352,7 @@ cmdkey /delete:soundcloud-mcp:client_id
 With `SC_SECRET_STORE=file`, delete `credentials.json` instead.
 </details>
 
-## Tools
+## MCP tools
 
 <details>
 <summary>All 23 tools</summary>
