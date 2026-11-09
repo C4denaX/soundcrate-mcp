@@ -81,6 +81,7 @@ const T = {
     cbHint: "Go back to the setup tab and try step 3 again, or ask your assistant to open the setup page again.",
     openUntil: "This page stays open until",
     openUntil2: "; any step you take here extends it.",
+    badState: "This return link does not match the current setup (it is wrong, already used or expired).",
     badLink: "This setup link is not valid or has expired. Ask your assistant to start the setup again.",
     reconnect: "You changed the app credentials: connect your account again (step 3).",
     badId: "The Client ID does not look right (letters, numbers, - and _ only).",
@@ -114,6 +115,7 @@ const T = {
     cbHint: "Vuelve a la pestaña de configuración y repite el paso 3, o pide a tu asistente que abra de nuevo la página de configuración.",
     openUntil: "Esta página sigue abierta hasta las",
     openUntil2: "; cualquier paso que des aquí amplía el plazo.",
+    badState: "Este enlace de vuelta no corresponde a la configuración actual (es incorrecto, ya se usó o ha caducado).",
     badLink: "Este enlace de configuración no es válido o ha caducado. Pide a tu asistente que empiece la configuración de nuevo.",
     reconnect: "Has cambiado las credenciales de la app: vuelve a conectar tu cuenta (paso 3).",
     badId: "El Client ID no parece correcto (solo letras, números, - y _).",
@@ -222,6 +224,12 @@ export async function startSetup({
     }
   };
 
+  // HH:MM de 24 h en hora local del equipo; no depende del locale del proceso (la página puede estar en otro idioma).
+  const hhmm = (ms) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
   const setupPage = (t, note = "") => {
     const creds = hasCreds();
     const envCreds = !!(process.env.SC_CLIENT_ID && process.env.SC_CLIENT_SECRET);
@@ -233,7 +241,7 @@ export async function startSetup({
     return page(
       t,
       `<h1>${esc(t.title)}</h1><p>${esc(t.intro)} <b>${esc(store.label)}</b>.</p>${note}
-<p class="mut">${esc(t.openUntil)} ${esc(new Date(deadline).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}${esc(t.openUntil2)}</p>
+<p class="mut">${esc(t.openUntil)} ${esc(hhmm(deadline))}${esc(t.openUntil2)}</p>
 <section><h2>${esc(t.s1)}</h2><p>${esc(t.s1a)} <a href="${lib.APPS_URL}" target="_blank" rel="noopener noreferrer">${lib.APPS_URL}</a> ${esc(t.s1b)}</p>
 <table><tr><td>${esc(t.name)}</td><td><code>SoundCrate (personal)</code></td></tr><tr><td>${esc(t.desc)}</td><td><code>${esc(t.descVal)}</code></td></tr>
 <tr><td>${esc(t.web)}</td><td>${esc(t.any)}</td></tr><tr><td>${esc(t.redirect)}</td><td><code>${esc(redirectUri)}</code></td></tr></table>
@@ -266,19 +274,29 @@ export async function startSetup({
     });
 
   // Canjea el código de SoundCloud por la sesión y la guarda.
-  async function complete(code, state) {
+  // brief: respuesta HTTP de /callback; en la repetición de un canje fallido no reenseña el cuerpo de error del token
+  // endpoint (solo el estado HTTP). completeFromUrl (terminal del usuario) pide el detalle completo.
+  async function complete(code, state, { brief = false } = {}) {
     if (!oauth && lastFail && code && sameSecret(state, lastFail.state)) {
-      const e = new Error(`the exchange already failed (${lastFail.message}) and the code cannot be reused`);
+      const http = /\b([1-5]\d\d)\b/.exec(lastFail.message)?.[1];
+      const why = !brief ? lastFail.message : http ? `HTTP ${http}` : null;
+      const e = new Error(
+        why
+          ? `the exchange already failed (${why}) and the code cannot be reused`
+          : "the exchange already failed; connect again from step 3"
+      );
       e.code = "exchange_failed";
       throw e;
     }
     if (!oauth || !code || !sameSecret(state, oauth.state)) throw new Error("state");
+    // Sin credenciales no hay canje: se dice la causa real, no se registra como canje fallido y el state NO se
+    // consume (el code no llegó a enviarse a SoundCloud, así que sigue siendo válido al guardar las credenciales).
+    const { clientId, clientSecret } = credentials();
     const o = oauth;
     oauth = null; // el state es de un solo uso, también si el canje falla (el code tampoco se puede reutilizar)
     lastFail = null;
     let tok;
     try {
-      const { clientId, clientSecret } = credentials();
       tok = await tokenRequest({
         grant_type: "authorization_code",
         client_id: clientId,
@@ -379,10 +397,10 @@ export async function startSetup({
         const err = u.searchParams.get("error");
         if (err) return errorPage(res, t, `SoundCloud: ${err} ${u.searchParams.get("error_description") || ""}`, 400, false, true); // sin enlace: esta ruta no autentica
         try {
-          const username = await complete(u.searchParams.get("code"), u.searchParams.get("state"));
+          const username = await complete(u.searchParams.get("code"), u.searchParams.get("state"), { brief: true });
           return send(res, 200, page(t, `<h1 class="ok">${esc(t.okTitle)}</h1><p>${esc(t.ok)} <b>${esc(username || "?")}</b>.</p><p>${esc(t.okBack)}</p>`));
         } catch (e) {
-          return errorPage(res, t, e.message === "state" ? t.badLink : e.message, 400, false, true);
+          return errorPage(res, t, e.message === "state" ? t.badState : e.message, 400, false, true);
         }
       }
       return send(res, 404, "Not found");

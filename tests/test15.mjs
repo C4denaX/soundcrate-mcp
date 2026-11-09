@@ -38,22 +38,28 @@ test("#21 la página dice hasta cuándo sigue abierta (en y es) y no usa JS ni r
     assert.match(txt(es), /sigue abierta hasta las/);
   } finally { t.s.close(); await t.s.done; }
 });
-const norm = (x) => x.replace(/\s+/g, " "); // \s incluye U+202F y U+00A0 (Node 18.13-22 con en-US usan U+202F antes de AM/PM)
+const hm = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 async function check60() {
   const t = await boot();
   try {
     const h = txt(await (await fetch(`${t.base}/setup?k=${t.k}`)).text());
-    const f = (min) => norm(new Date(Date.now() + min * 60000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
-    const exp = f(60), exp2 = f(61);
+    const exp = hm(Date.now() + 60 * 60000), exp2 = hm(Date.now() + 61 * 60000);
     assert.ok(h.includes(exp) || h.includes(exp2), `esperaba ${exp} en: ${h.slice(0, 300)}`);
   } finally { t.s.close(); await t.s.done; }
 }
-test("#21 el plazo por defecto es de 60 minutos (la hora mostrada ~ ahora+60)", check60);
-test("#21 idem con toLocaleTimeString que usa U+202F / U+00A0 (Node 18-22 en-US)", async () => {
+test("#21 el plazo por defecto es de 60 minutos (la hora mostrada ~ ahora+60, HH:MM 24 h)", check60);
+test("#21 la hora ya no depende de toLocaleTimeString (U+202F / AM-PM / basura del locale)", async () => {
   const orig = Date.prototype.toLocaleTimeString;
-  for (const sp of ["\u202f", "\u00a0"]) {
-    Date.prototype.toLocaleTimeString = function () { return `11:58${sp}AM`; };
-    try { await check60(); } finally { Date.prototype.toLocaleTimeString = orig; }
+  for (const out of ["11:58\u202fAM", "11:58\u00a0AM", "basura"]) {
+    Date.prototype.toLocaleTimeString = function () { return out; };
+    try {
+      await check60();
+      const t = await boot();
+      try {
+        const h = txt(await (await fetch(`${t.base}/setup?k=${t.k}`)).text());
+        assert.ok(!h.includes(out) && !/AM|PM/.test(h));
+      } finally { t.s.close(); await t.s.done; }
+    } finally { Date.prototype.toLocaleTimeString = orig; }
   }
 });
 test("#20 /callback con error: ofrece salida sin la clave (en y es)", async () => {
