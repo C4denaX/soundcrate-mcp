@@ -30,9 +30,9 @@ const sameSecret = (a, b) => {
 // salir con código 0 y aquí se da por abierto sin estarlo; no hay forma barata y fiable de comprobarlo. Está mitigado
 // porque server.mjs devuelve SIEMPRE la URL en tell_user (el asistente se la da al usuario), así que "opened" es
 // solo una pista, nunca la única vía para llegar a la página.
-// OPT-OUT PARA LAS PRUEBAS: con SC_NO_BROWSER=1 (también true o yes) no se intenta abrir nada. Es lo que usan las
-// pruebas (test19) para ejecutar login.mjs de verdad: en Windows rundll32 está en System32 y no depende de PATH, así
-// que vaciar PATH no basta para garantizar que npm test no abra un navegador.
+// OPT-OUT PARA LAS PRUEBAS: con SC_NO_BROWSER=1 (también true o yes) no se intenta abrir nada. Es lo que usa test19
+// para ejecutar login.mjs de verdad. Vaciar PATH no basta para garantizar que npm test no abra un navegador: se
+// sospecha que en Windows rundll32 se resuelve desde System32 aunque PATH esté vacío, pero no se ha comprobado allí.
 const envTrue = (v) => /^(1|true|yes)$/i.test(String(v ?? "").trim());
 export function openBrowser(url, platform = process.platform, { env = process.env, timeoutMs = 3000 } = {}) {
   if (envTrue(env.SC_NO_BROWSER)) return Promise.resolve(false);

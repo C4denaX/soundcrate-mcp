@@ -29,9 +29,10 @@ const isolation = {
   SC_SECRET_SERVICE: "soundcrate-review",
   SC_REDIRECT_URI: `http://127.0.0.1:${cbPort}/callback`,
 };
-// SC_NO_BROWSER: garantía de que el hijo no abre nada (en win32 rundll32 está en System32 y no depende de PATH).
-// PATH apunta a una carpeta vacía como doble seguro para open/xdg-open; con UNA sola clave (PATH y Path a la vez
-// son ambiguos en win32: los dos acabarían en el bloque de entorno del hijo).
+// SC_NO_BROWSER: garantía de que el hijo no abre nada. PATH apunta a una carpeta vacía como doble seguro para
+// open/xdg-open; con UNA sola clave (PATH y Path a la vez son ambiguos en win32: los dos acabarían en el bloque de
+// entorno del hijo). No está comprobado en Windows si rundll32 se resuelve desde System32 con PATH vacío; por eso
+// no se confía solo en PATH.
 const env = {
   ...process.env,
   ...isolation,
