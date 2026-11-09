@@ -285,7 +285,7 @@ export async function startSetup({
   // Canjea el código de SoundCloud por la sesión y la guarda.
   // brief: respuesta HTTP de /callback; en la repetición de un canje fallido no reenseña el cuerpo de error del token
   // endpoint (solo el estado HTTP). completeFromUrl (terminal del usuario) pide el detalle completo.
-  async function complete(code, state, { brief = false } = {}) {
+  async function complete(code, state, { brief = false, res = null } = {}) {
     if (!oauth && lastFail && code && sameSecret(state, lastFail.state)) {
       const http = /\/oauth\/token ([1-5]\d\d)\b/.exec(lastFail.message)?.[1];
       const why = !brief ? lastFail.message : http ? `HTTP ${http}` : null;
@@ -337,17 +337,35 @@ export async function startSetup({
       if (me.ok) username = (await me.json()).username || null;
     } catch {}
     onSuccess({ username, access_token: tok.access_token, expires_in: tok.expires_in });
-    finish({ ok: true, username });
+    finish({ ok: true, username }, res);
     return username;
   }
 
-  function finish(result) {
+  function finish(result, res = null) {
     if (finished) return;
     finished = true;
     clearTimeout(timer);
-    resolveDone(result);
-    active = null;
-    setTimeout(() => server.close(), 1500).unref();
+    const settle = () => {
+      resolveDone(result);
+      active = null;
+      setTimeout(() => server.close(), 1500).unref();
+    };
+    // login.mjs sale en cuanto `done` se resuelve. Si el canje viene de /callback, hay que dejar que la respuesta
+    // HTTP se envíe antes: si no, el navegador ve ERR_CONNECTION_REFUSED aunque el token ya esté guardado. 'close'
+    // cubre al cliente que corta la conexión; el temporizador evita que un 'finish' que nunca llega bloquee la salida.
+    if (res && !res.writableEnded) {
+      let settled = false;
+      const go = () => {
+        if (settled) return;
+        settled = true;
+        settle();
+      };
+      res.once("finish", go);
+      res.once("close", go);
+      setTimeout(go, 5000).unref();
+    } else {
+      settle();
+    }
   }
 
   const server = http.createServer(async (req, res) => {
@@ -412,7 +430,7 @@ export async function startSetup({
         const err = u.searchParams.get("error");
         if (err) return errorPage(res, t, `SoundCloud: ${err} ${u.searchParams.get("error_description") || ""}`, 400, false, true); // sin enlace: esta ruta no autentica
         try {
-          const username = await complete(u.searchParams.get("code"), u.searchParams.get("state"), { brief: true });
+          const username = await complete(u.searchParams.get("code"), u.searchParams.get("state"), { brief: true, res });
           return send(res, 200, page(t, `<h1 class="ok">${esc(t.okTitle)}</h1><p>${esc(t.ok)} <b>${esc(username || "?")}</b>.</p><p>${esc(t.okBack)}</p>`));
         } catch (e) {
           // La página va en el idioma del navegador: la falta de credenciales se cuenta con su texto localizado, no

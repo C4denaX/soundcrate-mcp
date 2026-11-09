@@ -154,50 +154,83 @@ try {
     });
   });
   await new Promise((r) => tokenSrv.listen(0, "127.0.0.1", r));
-  const tokenPort = tokenSrv.address().port;
-  const tokenRequest = async (params) => {
-    const r = await fetch(`http://127.0.0.1:${tokenPort}/oauth/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(params),
-    });
-    const text = await r.text();
-    if (!r.ok) throw new Error(`SoundCloud /oauth/token ${r.status}: ${text.slice(0, 300)}`);
-    return JSON.parse(text);
-  };
-  const m = new Map([["client_id", "FAKEID12345"], ["client_secret", "fake-secret-XYZ"]]);
-  const mem = { label: "mem", get: (a) => m.get(a) ?? null, set: (a, v) => m.set(a, v), del: (a) => m.delete(a), probe: () => ({ ok: true }) };
-  let haveCreds = true;
   const cbPort2 = await free();
-  const { startSetup } = await import("../setup.mjs");
-  const s = await startSetup({
-    store: mem,
-    credentials: () => {
-      if (!haveCreds) throw new Error("SoundCrate is not set up yet: the SoundCloud app credentials (Client ID and Client Secret) are missing.");
-      return { clientId: m.get("client_id"), clientSecret: m.get("client_secret") };
-    },
-    tokenRequest,
-    fetchFn: async () => Response.json({ username: "tester" }),
-    redirectUri: `http://127.0.0.1:${cbPort2}/callback`,
-    open: false,
-  });
+  const credsFile = path.join(dir2, "creds.json");
+  const env2 = {
+    ...process.env,
+    SC_SECRET_STORE: "file",
+    SC_SECRETS_FILE: credsFile,
+    SC_SECRET_SERVICE: "soundcrate-review",
+    SC_REDIRECT_URI: `http://127.0.0.1:${cbPort2}/callback`,
+    SC_NO_BROWSER: "1",
+    SC_TEST_TOKEN_URL: `http://127.0.0.1:${tokenSrv.address().port}/oauth/token`,
+    NODE_OPTIONS: withPreloads(process.env.NODE_OPTIONS),
+  };
+  delete env2.SC_CLIENT_ID;
+  delete env2.SC_CLIENT_SECRET;
+  delete env2.DISPLAY;
+  delete env2.WAYLAND_DISPLAY;
+  delete env2.PATH;
+  delete env2.Path;
+  env2[process.platform === "win32" ? "Path" : "PATH"] = emptyBin2;
+  const { createStore } = await import("../secrets.mjs");
+  const store2 = createStore({ env: env2 });
+  store2.set("client_id", "FAKEID12345");
+  store2.set("client_secret", "fake-secret-XYZ");
+  let child2;
+  let out2 = "";
+  let err2 = "";
+  let exited = null;
   try {
-    const connectUrl = s.url.replace("/setup?", "/setup/connect?");
-    const state = new URL((await fetch(connectUrl, { redirect: "manual" })).headers.get("location")).searchParams.get("state");
-    const sameUrl = `http://127.0.0.1:${cbPort2}/callback?code=CODE1&state=${encodeURIComponent(state)}`;
-    haveCreds = false;
-    await assert.rejects(s.completeFromUrl(sameUrl), (e) => e.code === "no_credentials");
+    child2 = spawn(process.execPath, [path.join(root, "login.mjs")], {
+      env: env2,
+      cwd: dir2,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    child2.stdout.on("data", (d) => (out2 += d));
+    child2.stderr.on("data", (d) => (err2 += d));
+    exited = new Promise((r) => child2.once("exit", (code, signal) => r({ code, signal })));
+    const waitFor = async (get, re, what) => {
+      for (let i = 0; i < 100 && !re.test(get()); i++) await sleep(100);
+      assert.match(get(), re, `${what}: out=${out2} err=${err2}`);
+    };
+    await waitFor(() => out2, /http:\/\/\S+\/setup\?k=\S+/, "URL de la página");
+    const url = out2.match(/http:\/\/\S+\/setup\?k=\S+/)[0];
+    const connect = await fetch(url.replace("/setup?", "/setup/connect?"), { redirect: "manual" });
+    const state = new URL(connect.headers.get("location")).searchParams.get("state");
+    assert.ok(state, "hay state");
+    const back = `http://127.0.0.1:${cbPort2}/callback?code=CODE1&state=${encodeURIComponent(state)}`;
+
+    store2.del("client_secret"); // faltan credenciales
+    const r1 = await fetch(back);
+    const h1 = await r1.text();
+    assert.equal(r1.status, 400, "sin credenciales /callback da error");
+    assert.match(h1, /SoundCrate is not set up yet/, "la página explica que faltan las credenciales");
     assert.equal(tokenCalls, 0, "sin credenciales no se llama al token endpoint");
-    haveCreds = true;
-    assert.equal(await s.completeFromUrl(sameUrl), "tester");
+
+    store2.set("client_secret", "fake-secret-XYZ"); // la MISMA URL debe seguir valiendo (el state no se consumió)
+    const r2 = await fetch(back);
+    const h2 = await r2.text();
+    assert.equal(r2.status, 200, `el navegador recibe la página de éxito: ${h2.slice(0, 300)}`);
+    assert.match(h2, /All set!|¡Listo!/, "es la página de éxito");
+    assert.match(h2, /tester/, "muestra el usuario de /me");
     assert.equal(tokenCalls, 1, "la MISMA URL canjea tras reponer las credenciales");
     assert.match(tokenBody, /grant_type=authorization_code/);
-    assert.equal(m.get("refresh_token"), "fake-refresh");
+    assert.equal(store2.get("refresh_token"), "fake-refresh", "el refresh_token se guardó");
+
+    const ex = await Promise.race([exited, sleep(10000).then(() => null)]);
+    assert.ok(ex, `login.mjs debe salir tras enviar la página: out=${out2} err=${err2}`);
+    assert.equal(ex.code, 0, `login.mjs sale con 0: out=${out2} err=${err2}`);
+    assert.ok(!(out2 + err2).includes("fake-secret-XYZ"), "el secreto no sale por pantalla");
   } finally {
-    s.close();
-    await s.done;
+    try {
+      child2?.kill();
+    } catch {}
+    await waitExit(child2);
     tokenSrv.closeAllConnections?.();
     await new Promise((r) => tokenSrv.close(r));
+    fs.rmSync(dir2, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
 process.exit(0);
