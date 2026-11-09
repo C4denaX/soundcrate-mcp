@@ -178,7 +178,7 @@ After adding SoundCrate, restart the app (on macOS, quit it completely with Cmd+
 | How you installed it | How to update |
 |---|---|
 | **Claude Desktop** (`.mcpb`) | Download the latest `soundcrate.mcpb` from the [releases page](https://github.com/C4denaX/soundcrate-mcp/releases/latest) and open it again. Your credentials stay in your system's secure storage. |
-| **Claude Code or Cowork** (plugin) | Run `/plugin`, open the **Marketplaces** tab, choose `soundcrate` and update it (or turn on auto-update there), then reload the plugin or restart the app. Or `claude plugin update` from the terminal. |
+| **Claude Code or Cowork** (plugin) | Run `/plugin`, open the **Marketplaces** tab, choose `soundcrate` and update it (or turn on auto-update there), then reload the plugin or restart the app. Or from the terminal: `claude plugin update soundcrate@soundcrate` (or `claude plugin update soundcrate`). |
 | **npx** (VS Code, Cursor, OpenCode, Codex, Gemini CLI…) | Change the version tag in the server's arguments, for example `#v1.7.0` to the new `#vX.Y.Z` (the latest is on the [releases page](https://github.com/C4denaX/soundcrate-mcp/releases/latest)), and restart the app. Without a tag, `npx` can keep using its cached copy. |
 | **Cloned copy** | Run `git pull` in the folder and restart the app. |
 

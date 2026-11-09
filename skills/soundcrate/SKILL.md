@@ -31,7 +31,7 @@ Tell the user, in plain language, how to get them:
   responsibility.
 - The setup page expires 60 minutes after the user's last action on it (the page shows until what time it stays open;
   `setup_status` reports `setup_page_expired`): call `start_setup` again. After an error on /callback the page tells
-  the user to go back to the setup tab or ask for a new page. `opened` in the result is only a hint: always give
+  the user to go back to the setup tab or ask for a new page. `browser_opened` in the result is only a hint: always give
   the user the URL. If the user changes the Client ID, they must connect again (step 3 of the page).
 - After setup, ask whether they have SoundCloud Go+ and, if so, how to declare it, depending on how SoundCrate
   was installed: extension (Claude Desktop) > Settings > Extensions > SoundCrate, switch "I have SoundCloud Go+"
