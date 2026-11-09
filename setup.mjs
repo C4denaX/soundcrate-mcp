@@ -83,7 +83,8 @@ const T = {
     okBack: "You can close this tab and go back to your assistant.",
     errTitle: "Something went wrong",
     retry: "Back to the setup page",
-    cbHintCreds: "Go back to the setup tab and complete step 2 (the app credentials), then connect again in step 3.",
+    cbHintCreds: "Go back to the setup tab and complete step 2 (the app credentials), then reload this same URL (no need to connect again).",
+    noCreds: "SoundCrate is not set up yet: the SoundCloud app credentials (Client ID and Client Secret) are missing.",
     cbHint: "Go back to the setup tab and try step 3 again, or ask your assistant to open the setup page again.",
     openUntil: "This page stays open until",
     openUntil2: "; any step you take here extends it.",
@@ -118,7 +119,8 @@ const T = {
     okBack: "Ya puedes cerrar esta pestaña y volver a tu asistente.",
     errTitle: "Algo ha fallado",
     retry: "Volver a la página de configuración",
-    cbHintCreds: "Vuelve a la pestaña de configuración y completa el paso 2 (las credenciales de la app); después conecta de nuevo en el paso 3.",
+    cbHintCreds: "Vuelve a la pestaña de configuración y completa el paso 2 (las credenciales de la app); después recarga esta misma URL (no hace falta conectar de nuevo).",
+    noCreds: "SoundCrate aún no está configurado: faltan las credenciales de la app de SoundCloud (Client ID y Client Secret).",
     cbHint: "Vuelve a la pestaña de configuración y repite el paso 3, o pide a tu asistente que abra de nuevo la página de configuración.",
     openUntil: "Esta página sigue abierta hasta las",
     openUntil2: "; cualquier paso que des aquí amplía el plazo.",
@@ -413,7 +415,10 @@ export async function startSetup({
           const username = await complete(u.searchParams.get("code"), u.searchParams.get("state"), { brief: true });
           return send(res, 200, page(t, `<h1 class="ok">${esc(t.okTitle)}</h1><p>${esc(t.ok)} <b>${esc(username || "?")}</b>.</p><p>${esc(t.okBack)}</p>`));
         } catch (e) {
-          return errorPage(res, t, e.message === "state" ? t.badState : e.message, 400, false, e.code === "no_credentials" ? "creds" : true);
+          // La página va en el idioma del navegador: la falta de credenciales se cuenta con su texto localizado, no
+          // con el mensaje en inglés de lib.credentials().
+          const msg = e.code === "no_credentials" ? t.noCreds : e.message === "state" ? t.badState : e.message;
+          return errorPage(res, t, msg, 400, false, e.code === "no_credentials" ? "creds" : true);
         }
       }
       return send(res, 404, "Not found");

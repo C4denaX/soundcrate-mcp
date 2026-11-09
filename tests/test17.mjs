@@ -109,16 +109,23 @@ test("callback repetido: mensajes con números de 3 cifras que no son estado HTT
   }
 });
 
-test("callback sin credenciales: la pista manda al paso 2 (en y es), sin la clave", async () => {
+test("callback sin credenciales: mensaje en el idioma de la página y la MISMA URL (en y es), sin la clave", async () => {
   let creds = { clientId: "abcdefgh123", clientSecret: "secret-12345" };
   const t = await boot({ credentials: () => { if (!creds) throw new Error("SoundCrate is not set up yet: the app credentials are missing."); return creds; } });
   try {
     const st = await connect(t);
     creds = null;
-    for (const [lang, re] of [["en", /complete step 2/], ["es", /completa el paso 2/]]) {
+    const expected = { en: { msg: /not set up yet/, hint: /reload this same URL/ }, es: { msg: /no está configurado/, hint: /recarga esta misma URL/ } };
+    for (const lang of ["en", "es"]) {
       const h = await (await fetch(`${t.base}/callback?code=C&state=${st}`, { headers: { "accept-language": lang } })).text();
-      assert.match(txt(h), /not set up yet/); assert.match(txt(h), re);
-      assert.doesNotMatch(txt(h), /try step 3 again|repite el paso 3/); assert.ok(!h.includes(t.k));
+      const text = txt(h);
+      assert.match(text, lang === "es" ? /completa el paso 2/ : /complete step 2/);
+      assert.match(text, expected[lang].msg);
+      assert.match(text, expected[lang].hint);
+      // El mensaje va en el idioma de la página y ya no manda a conectar de nuevo en el paso 3.
+      assert.doesNotMatch(text, lang === "es" ? /not set up yet/ : /no está configurado/);
+      assert.doesNotMatch(text, /try step 3 again|repite el paso 3|connect again in step 3|conecta de nuevo en el paso 3/);
+      assert.ok(!h.includes(t.k));
     }
   } finally { t.s.close(); await t.s.done; }
 });
