@@ -184,6 +184,18 @@ const good = (key, extra = {}) => ({ k: key, client_id: "abcdefgh123", client_se
     fake(`/usr/bin/touch ${marker2}; exit 0`);
     assert.equal(await open({ PATH: dir, DISPLAY: ":0", SC_NO_BROWSER: "1" }), false, "SC_NO_BROWSER desactiva la apertura");
     assert.ok(!fs.existsSync(marker2), "con SC_NO_BROWSER ni siquiera se lanza el comando");
+    // Solo 1/true/yes cuentan: "0" y "false" son valores no vacíos que antes también desactivaban el navegador.
+    const marker3 = path.join(dir, "ran-no-browser-off");
+    fake(`/usr/bin/touch ${marker3}; exit 0`);
+    for (const off of ["0", "false", "no", ""]) {
+      assert.equal(await open({ PATH: dir, DISPLAY: ":0", SC_NO_BROWSER: off }), true, `SC_NO_BROWSER="${off}" no desactiva`);
+      assert.ok(fs.existsSync(marker3), `con SC_NO_BROWSER="${off}" sí se lanza el comando`);
+      fs.rmSync(marker3, { force: true });
+    }
+    for (const on of ["1", "true", "TRUE", "yes", " Yes "]) {
+      assert.equal(await open({ PATH: dir, DISPLAY: ":0", SC_NO_BROWSER: on }), false, `SC_NO_BROWSER="${on}" desactiva`);
+      assert.ok(!fs.existsSync(marker3), `con SC_NO_BROWSER="${on}" no se lanza el comando`);
+    }
   }
   fs.rmSync(dir, { recursive: true, force: true });
   console.log("#23 openBrowser OK");
