@@ -29,6 +29,15 @@ rl.on("line", async (line) => {
   try {
     await s.completeFromUrl(line.trim());
   } catch (e) {
+    if (e.code === "no_credentials") {
+      // Sin credenciales no se canjea nada y el state sigue vivo: la MISMA URL sirve al guardarlas.
+      console.error(
+        `Could not complete the login: ${e.message}\n` +
+          "To fix it: in step 2 of the setup page, save the Client ID and the Client Secret of your SoundCloud app.\n" +
+          "Then paste the SAME URL here again (no need to connect again or get a new one)."
+      );
+      return;
+    }
     console.error("Could not complete the login with that URL:", e.message === "state" ? "that URL does not match this session (wrong, already used, or expired)" : e.message,
       "\nTo retry: connect again from step 3 on the setup page (or run soundcrate-login again), then paste the new URL."
     );
