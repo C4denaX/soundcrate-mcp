@@ -4,7 +4,7 @@
   "display_name": "SoundCrate",
   "version": "1.7.0",
   "description": "Dig, curate and reorder your SoundCloud playlists by talking to Claude.",
-  "long_description": "SoundCrate connects Claude to your own SoundCloud account. Search tracks by genre, BPM, key or upload date; get related tracks and artists; create private playlists; and analyze or reorder them by BPM or harmonic key (Camelot). Everything runs on your computer: your credentials stay in the system secret store and setup happens on a local page, never in the chat. After installing, ask Claude: \"Help me set up SoundCrate\". Requires a SoundCloud app, which needs a SoundCloud Artist Pro plan. Not affiliated with SoundCloud.",
+  "long_description": "SoundCrate connects Claude to your own SoundCloud account. Search tracks by genre, BPM or upload date (every result shows its key); get related tracks and artists; create private playlists; and analyze or reorder them by BPM or harmonic key (Camelot). Everything runs on your computer: your credentials stay in the system secret store and setup happens on a local page, never in the chat. After installing, ask Claude: \"Help me set up SoundCrate\". Requires a SoundCloud app, which needs a SoundCloud Artist Pro plan. Creating the app means accepting SoundCloud's API terms: section 03 forbids using API content as input to AI, and SoundCloud can revoke access without notice, so you use SoundCrate at your own responsibility. Not affiliated with SoundCloud.",
   "author": {
     "name": "Sergio Ruiz",
     "url": "https://github.com/C4denaX"
@@ -26,7 +26,8 @@
         "${__dirname}/server.mjs"
       ],
       "env": {
-        "SC_GO_PLUS": "${user_config.go_plus}"
+        "SC_GO_PLUS": "${user_config.go_plus}",
+        "SOUNDCRATE_DIST": "mcpb"
       }
     }
   },
@@ -34,7 +35,7 @@
     "go_plus": {
       "type": "boolean",
       "title": "I have SoundCloud Go+",
-      "description": "Turn on if your SoundCloud account has Go+, so SoundCrate treats Go+ catalogue tracks as playable in full. SoundCloud does not report this, so you have to tell it.",
+      "description": "Turn on if your SoundCloud account has Go+, so SoundCrate treats Go+ catalogue tracks as playable in full (label tracks usually are, with no guarantee for your region or rights). SoundCloud does not report this, so you have to tell it.",
       "default": false,
       "required": false
     }
@@ -114,11 +115,11 @@
     },
     {
       "name": "replace_track_in_playlist",
-      "description": "Replace a track with another at the same position (e.g."
+      "description": "Replace a track with another at the same position, e.g. a user upload with its official release."
     },
     {
       "name": "suggest_tracks",
-      "description": "From 1 to 5 seed tracks, gathers their SoundCloud related tracks, removes duplicates, the seeds and anything already in exclude_playlist_id, applies BPM, dur…"
+      "description": "Suggest tracks from 1 to 5 seeds: merges their related tracks, filters by BPM, duration and genre, and ranks them. Writes nothing."
     },
     {
       "name": "find_official_version",
@@ -126,11 +127,11 @@
     },
     {
       "name": "analyze_playlist",
-      "description": "Summary of a playlist for planning: total duration, BPM (min, median, max), Camelot keys, genres, years, duplicate tracks, BPM jumps above 6 and harmonic cla…"
+      "description": "Summarize a playlist for planning: duration, BPM, Camelot keys, genres, duplicates, BPM jumps and harmonic clashes. Read-only."
     },
     {
       "name": "update_playlist",
-      "description": "Change a playlist's title, description, genre or tags and/or reorder its tracks: sort_by (bpm, camelot, duration or released, with direction asc/desc) or tra…"
+      "description": "Change a playlist's title, description, genre or tags and/or reorder its tracks by BPM, key, duration or release date. Never adds or removes tracks."
     }
   ],
   "tools_generated": false,

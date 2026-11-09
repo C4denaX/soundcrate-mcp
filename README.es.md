@@ -12,8 +12,9 @@
 </p>
 
 SoundCrate conecta Claude (o cualquier otro asistente de IA compatible con [MCP](https://modelcontextprotocol.io))
-con **tu propia cuenta de SoundCloud**. Pídeselo con tus palabras: busca pistas por género, tempo, tonalidad o
-fecha, encuentra pistas y artistas parecidos, crea playlists privadas y las ordena como lo haría un DJ.
+con **tu propia cuenta de SoundCloud**. Pídeselo con tus palabras: busca pistas por género, etiquetas, tempo,
+duración o fecha de subida (cada resultado muestra su tonalidad, así que puedes pedir pistas compatibles),
+encuentra pistas y artistas parecidos, crea playlists privadas y las ordena como lo haría un DJ.
 
 > «Busca techno de 128 a 132 BPM subido este año y hazme una playlist privada de dos horas en tonalidades compatibles».
 >
@@ -32,6 +33,15 @@ Funciona en tu ordenador, guarda tus credenciales en el almacén seguro de tu si
   - **Claude Code, Cowork u otra app MCP** (Cursor, VS Code, OpenCode, Codex, Gemini CLI…), y además
     [Node.js](https://nodejs.org) 18 o superior. Funciona en macOS, Windows y Linux.
 
+> [!WARNING]
+> **Lee antes las condiciones de la API de SoundCloud.** Crear una app de SoundCloud significa aceptar las
+> [condiciones de uso de la API de SoundCloud](https://developers.soundcloud.com/docs/api/terms-of-use) (en inglés). La sección 03 prohíbe usar el contenido
+> obtenido por la API (incluidos títulos, etiquetas y otros textos) como entrada de cualquier tecnología de
+> inteligencia artificial, y SoundCloud puede revocar sin aviso el acceso a la API de una app. SoundCrate envía
+> este tipo de datos a tu asistente de IA, así que lo usas bajo tu responsabilidad. La página de configuración
+> muestra este aviso en el paso 1 y propone como descripción de la app *Local AI assistant to manage my own
+> playlists* (en español, *Asistente de IA local para gestionar mis propias playlists*, si tu navegador está en español); describe tu app con honestidad.
+
 ## Instalación
 
 ### Claude Desktop (lo más fácil, sin conocimientos técnicos)
@@ -42,7 +52,7 @@ Funciona en tu ordenador, guarda tus credenciales en el almacén seguro de tu si
 3. Abre un chat nuevo y escribe: **Ayúdame a configurar SoundCrate**. Claude te guía en el resto
    ([qué pasa después](#primera-configuración)).
 
-Para actualizar, descarga el fichero de nuevo y ábrelo.
+Para actualizar, mira [Actualizar](#actualizar).
 
 ### Claude Code
 
@@ -164,6 +174,15 @@ y Linux, `where node` en Windows).
 
 Después de añadir SoundCrate, reinicia la app (en macOS, ciérrala del todo con Cmd+Q).
 
+## Actualizar
+
+| Cómo lo instalaste | Cómo actualizar |
+|---|---|
+| **Claude Desktop** (`.mcpb`) | Descarga el último `soundcrate.mcpb` de la [página de versiones](https://github.com/C4denaX/soundcrate-mcp/releases/latest) y ábrelo de nuevo. Tus credenciales siguen en el almacén seguro de tu sistema. |
+| **Claude Code o Cowork** (plugin) | Ejecuta `/plugin`, abre la pestaña **Marketplaces**, elige `soundcrate` y actualízalo (o activa ahí la actualización automática); después recarga el plugin o reinicia la app. O desde la terminal: `claude plugin update soundcrate@soundcrate` (o `claude plugin update soundcrate`). |
+| **npx** (VS Code, Cursor, OpenCode, Codex, Gemini CLI…) | Cambia la etiqueta de versión en los argumentos del servidor, por ejemplo `#v1.7.0` por la nueva `#vX.Y.Z` (la última está en la [página de versiones](https://github.com/C4denaX/soundcrate-mcp/releases/latest)), y reinicia la app. Sin etiqueta, `npx` puede seguir usando su copia en caché. |
+| **Copia clonada** | Ejecuta `git pull` en la carpeta y reinicia la app. |
+
 ## Primera configuración
 
 Pídele a tu asistente: **Ayúdame a configurar SoundCrate.** Comprueba tu ordenador con `setup_status` y te
@@ -171,11 +190,15 @@ explica cada paso. Cuando toca, abre una página de configuración en tu navegad
 ordenador (`http://127.0.0.1:8976`) y tiene tres pasos:
 
 1. **Registrar una app de SoundCloud.** Enlaza a <https://soundcloud.com/you/apps> y te dice exactamente qué
-   poner, incluida la **Redirect URI** `http://127.0.0.1:8976/callback`.
-2. **Pegar el Client ID y el Client Secret de la app.** Van directos al almacén seguro de tu sistema.
+   poner, incluida la **Redirect URI** `http://127.0.0.1:8976/callback`, además del aviso sobre las
+   [condiciones de la API](#qué-necesitas) de SoundCloud.
+2. **Pegar el Client ID y el Client Secret de la app.** Van directos al almacén seguro de tu sistema. Si más
+   adelante cambias el Client ID, tendrás que conectar de nuevo (paso 3).
 3. **Pulsar «Conectar con SoundCloud»** y autorizar la app.
 
-Y ya está. Tus secretos nunca pasan por el chat ni por el modelo de IA, y la página se cierra al terminar.
+Y ya está. Tus secretos nunca pasan por el chat ni por el modelo de IA. La página se cierra al terminar, al cerrar
+la app o 60 minutos después de tu última acción en la página (la página muestra hasta qué hora sigue abierta; si caduca, pide la configuración otra vez: el asistente te da un enlace
+nuevo, y `setup_status` avisa de que la página caducó).
 
 ¿Prefieres la terminal? `npx -y -p github:C4denaX/soundcrate-mcp#v1.7.0 soundcrate-login` abre la misma página.
 
@@ -190,17 +213,54 @@ Y ya está. Tus secretos nunca pasan por el chat ni por el modelo de IA, y la p�
 - **Ordenar:** «Busca duplicados en esta playlist», «Cámbiale el nombre y ponle el género Techno».
 
 Cada pista trae BPM, tonalidad y su código **Camelot** (para mezclar en armonía), género, sello, fecha de
-lanzamiento, reproducciones y likes.
+lanzamiento, reproducciones y likes. Las búsquedas filtran por género, etiquetas, BPM, duración y fecha de
+*subida*; no hay filtro por tonalidad ni por fecha de lanzamiento, pero cada resultado muestra su tonalidad y su
+fecha de lanzamiento.
+
+**Orden Camelot.** Al ordenar por tonalidad los números van en orden (ascendente o descendente). Si un número
+tiene las dos letras, se empieza por la que mezcla con la pista anterior, eligiendo la combinación con menos
+choques (nunca más que el orden simple 1A 1B 2A 2B); con empate, en zigzag 1A 1B 2B 2A…. Las pistas sin
+tonalidad van al final. Mezclan
+bien la misma clave, la relativa (mismo número, otra letra) y las vecinas (un número más o menos, misma letra).
+Saltarse un número que no está en la playlist cuenta como choque.
+
+## Conviene saber
+
+- **Las playlists largas** se leen por páginas: `get_playlist` devuelve 100 pistas por defecto (200 como máximo)
+  con su `position`, más `total` y `next_offset`, y tiene una opción `compact` que devuelve menos datos por pista.
+- **Las páginas de resultados** (`next_cursor`) solo valen para la herramienta que las dio.
+- **Límite de peticiones:** si SoundCloud dice «demasiadas peticiones», SoundCrate indica cuándo se restablece el
+  cupo y no reintenta. Espera hasta entonces.
+- **Sin recortes en silencio:** tras un límite de peticiones, un error del servidor o un tiempo agotado recibes un
+  error, nunca una lista recortada. La única excepción es cuando SoundCloud rechaza el filtro `access` (HTTP 400
+  o 422): SoundCrate repite la petición sin él y marca el resultado con `access_filter: "api_default"`, porque
+  pueden faltar pistas bloqueadas.
 
 ## Cómo protege tu música
 
 - Las playlists nuevas son **privadas** salvo que pidas lo contrario.
 - SoundCrate **no puede borrar playlists** ni descargar audio.
-- Los cambios en una misma playlist se aplican **de uno en uno**, así que las peticiones en paralelo no pierden
-  pistas.
+- Los cambios en una misma playlist se aplican **de uno en uno dentro de un mismo proceso de SoundCrate**, y cada
+  escritura lee la playlist una vez dentro de ese cerrojo: cuesta una lectura y una escritura (una lectura más solo
+  si la respuesta de SoundCloud no cuadra). Pero no es
+  atómico: SoundCloud no permite bloquear una playlist, así que dos sesiones de SoundCrate (dos apps abiertas) o
+  la web de SoundCloud editando a la vez la misma playlist pueden pisarse. No lo hagas.
 - Si SoundCloud oculta alguna pista al leer una playlist, SoundCrate **se niega a escribir** en ella, porque
   reescribirla las borraría.
+- Si una escritura pierde pistas, SoundCrate **restaura la lista como estaba**; si ni siquiera eso funciona, el
+  error incluye la lista original para que la arregles a mano.
 - Reordenar nunca añade ni quita pistas; si SoundCloud devuelve otro conjunto, se restaura el orden anterior.
+  Un `track_order` con pistas repetidas conserva las repeticiones.
+- Sustituir una pista restaura la playlist si SoundCloud no acepta la nueva, e indica qué otras copias quitó
+  (`removed_elsewhere`) para que la playlist conserve una sola copia de la pista nueva.
+- Si la relectura de la playlist tras una escritura falla, el error dice que el cambio se envió pero no se pudo
+  confirmar, y que no se restauró nada.
+- Restaurar la lista de pistas no deshace los cambios de metadatos de `update_playlist` (título, descripción,
+  género, etiquetas).
+- Quitar una pista que aparece varias veces exige una `position` o `all_copies` (no las dos a la vez); si no, no
+  cambia nada.
+- Las entradas de `track_ids` que no son ids de pista se saltan y se listan en `ignored_ids` (crear, añadir,
+  quitar). Si no queda ningún id válido, no se hace nada y se devuelve un error (sin `ignored_ids`). Una lista de `track_ids` (o un texto como `"1,2"`) con entradas pero ninguna válida, también un texto que solo trae comas o blancos, da ese mismo error. Para crear una playlist sin pistas, omite `track_ids` o pasa una lista vacía (`[]` o `""`). `tags` acepta una lista.
 - Las herramientas que escriben están marcadas como tales, así que las apps que lo admiten te piden confirmación
   antes de cambiar una playlist.
 
@@ -216,8 +276,16 @@ reproducir *las apps*, no lo que puedes escuchar *tú*. SoundCrate añade el cam
 | `go_plus_probable` | Catálogo de sello que con Go+ suele sonar entero en SoundCloud (sin garantía en todos los países). |
 | `restricted` | Bloqueada por derechos, región o por quien la subió; puede no sonar ni con Go+. |
 
-SoundCloud no informa de si tienes Go+, así que se lo dices tú a SoundCrate (el interruptor **I have SoundCloud
-Go+** o `SC_GO_PLUS=1`). Así puedes pedirle «solo pistas que pueda escuchar enteras».
+SoundCloud no informa de si tienes Go+, así que se lo dices tú a SoundCrate. Así puedes pedirle «solo pistas que
+pueda escuchar enteras». Dónde se declara depende de cómo lo instalaste:
+
+| Instalado como | Dónde activar Go+ |
+|---|---|
+| Extensión de Claude Desktop | Claude Desktop > **Ajustes > Extensiones > SoundCrate**, interruptor **I have SoundCloud Go+**. No edites `claude_desktop_config.json`: arrancaría un segundo SoundCrate. |
+| Plugin de Claude Code o Cowork | `/plugin`, abre `soundcrate` y marca su opción `go_plus`. No añadas otro servidor con `claude mcp add`. |
+| npx o copia clonada | Añade la variable `SC_GO_PLUS=1` al servidor en la configuración de tu app (mira [Otras apps](#otras-apps)). |
+
+Las pistas `go_plus_probable` suelen sonar enteras con Go+, pero sin garantía (región, derechos).
 
 ## Privacidad y seguridad
 
@@ -246,7 +314,9 @@ opcionales:
 | «SoundCrate is not set up yet» | Di **Ayúdame a configurar SoundCrate**. |
 | No se abre la página de configuración | Pide al asistente el enlace y ábrelo en el navegador de ese mismo ordenador. |
 | «Port 8976 is busy» | Cierra cualquier otra página de configuración o inicio de sesión de SoundCrate y vuelve a intentarlo. |
-| SoundCloud rechaza la Redirect URI | Pon `http://localhost:8976/callback` en tu app de SoundCloud y define `SC_REDIRECT_URI=http://localhost:8976/callback` para SoundCrate. |
+| SoundCloud rechaza la Redirect URI | Con una instalación manual (npx o copia clonada, mira [Otras apps](#otras-apps)): pon `http://localhost:8976/callback` en tu app de SoundCloud y añade `SC_REDIRECT_URI=http://localhost:8976/callback` al entorno del servidor. Extensión de Claude Desktop: no hay forma de definirla. Plugin: su `.mcp.json` no la define y no está verificado que el servidor herede el entorno con el que se lanza Claude Code, así que no cuentes con ello; si la necesitas, usa una instalación manual. |
+| «The setup page expired» | Se cierra 60 minutos después de tu última acción en la página. Pide al asistente que inicie la configuración otra vez. |
+| «SoundCloud rate limit reached» | El mensaje dice cuándo se restablece el cupo. Espera hasta entonces. |
 | Linux: «secret-tool is not installed» | Instálalo: `sudo apt install libsecret-tools gnome-keyring` (Debian/Ubuntu), `sudo dnf install libsecret` (Fedora), `sudo pacman -S libsecret` (Arch). |
 | «The saved session is no longer valid» | Di **Vuelve a conectar SoundCrate** y conecta de nuevo en la página de configuración. |
 | `npx` falla con un error de Git | Instala [Git](https://git-scm.com) o usa la opción de [copia clonada](#otras-apps). |
@@ -293,7 +363,7 @@ Con `SC_SECRET_STORE=file`, borra el fichero `credentials.json`.
 |---|---|
 | `setup_status` | Comprueba qué falta en este ordenador y devuelve el siguiente paso. |
 | `start_setup` | Abre la página local de configuración (credenciales e inicio de sesión en SoundCloud). |
-| `search_tracks` | Busca por texto, géneros, etiquetas, BPM, duración y fecha de subida (hasta 200 por página). |
+| `search_tracks` | Busca por texto, géneros, etiquetas, BPM, duración y fecha de subida (hasta 200 por página). Sin filtro de tonalidad. |
 | `get_track` | Una pista por id o URL. |
 | `get_related_tracks` | Pistas relacionadas según SoundCloud, quitando si quieres las de una playlist. |
 | `get_my_tracks` | Tus likes, lo último escuchado, tu feed, las subidas de quien sigues o tus reposts. |
@@ -307,7 +377,7 @@ Con `SC_SECRET_STORE=file`, borra el fichero `credentials.json`.
 | `analyze_playlist` | Duración, BPM, tonalidades, géneros, duplicados, saltos de BPM y choques de tonalidad. |
 | `whoami` | Tu cuenta y si has declarado Go+. |
 | `get_my_playlists` | Tus playlists (privadas incluidas), las que te gustan o tus emisoras; filtra por título. |
-| `get_playlist` | Una playlist con sus pistas, por id o URL. |
+| `get_playlist` | Una playlist con sus pistas, por id o URL, en páginas (`offset`, `limit` hasta 200, `compact`). |
 | `create_playlist` | Crea una playlist, privada por defecto. |
 | `add_tracks_to_playlist` | Añade pistas al final, sin duplicados. |
 | `remove_tracks_from_playlist` | Quita varias pistas en una sola escritura. |
@@ -322,14 +392,22 @@ Con `SC_SECRET_STORE=file`, borra el fichero `credentials.json`.
 - Habla MCP 2024-11-05 a 2025-11-25 (`initialize`) y 2026-07-28 (sin estado, `server/discover`).
 - Las descripciones de las herramientas están en inglés, por debajo de 1.024 caracteres y con esquemas planos que
   aceptan OpenAI, Gemini y los modelos locales.
-- `npm test` ejecuta diez baterías sin red (protocolo con un proceso stdio real, almacenes de secretos, la página
-  de configuración con HTTP real, ficheros de distribución). `npm run test:store` prueba el almacén real de tu
-  sistema con una entrada desechable. La CI lo ejecuta todo en Linux, macOS y Windows con los almacenes reales.
+- `npm test` ejecuta veinte baterías sin red (protocolo con un proceso stdio real, almacenes de secretos, la página
+  de configuración con HTTP real, ficheros de distribución) bajo un guard que impide toda conexión externa. El guard
+  se carga con `node --import`, así que para ejecutar las pruebas hace falta Node 18.18 o superior; el servidor en sí
+  solo necesita Node 18. `npm run test:store` prueba el almacén real de tu sistema con una entrada desechable. La CI
+  lo ejecuta todo en Linux, macOS y Windows con los almacenes reales.
+- `SC_NO_BROWSER=1` (también `true` o `yes`, sin distinguir mayúsculas y aunque lleve espacios alrededor) evita que
+  la página de configuración intente abrir un navegador; con cualquier otro valor, incluidos `0` y `false`, sigue
+  intentándolo. Las pruebas lo usan para ejecutar el `login.mjs` real sin abrir nada.
 - Distribución: `manifest.json` (extensión de Claude Desktop, empaquetada con `@anthropic-ai/mcpb`),
   `.claude-plugin/` + `.mcp.json` + `skills/` (plugin y marketplace de Claude), `bin` de `package.json` (npx).
 - Publicar una versión: sube la versión en `package.json`, `manifest.json`, `.claude-plugin/plugin.json` y
-  `server.mjs` (`tests/test10.mjs` comprueba que coinciden) y sube una etiqueta `vX.Y.Z`. El flujo de release
-  publica `soundcrate.mcpb`.
+  `server.mjs`, y todas las referencias de instalación `#vX.Y.Z` de los README, y sube una etiqueta `vX.Y.Z`. La
+  CI ejecuta `node .github/scripts/check-versions.mjs` (falla si alguna de esas versiones, o la etiqueta, difiere
+  de `package.json`) y `node .github/scripts/check-manifest-tools.mjs` (las herramientas de `manifest.json` deben
+  coincidir con `server.mjs`, con descripciones completas). Después el flujo de release publica
+  `soundcrate.mcpb`.
 
 ## Licencia y créditos
 

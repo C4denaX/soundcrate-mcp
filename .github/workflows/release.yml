@@ -1,5 +1,5 @@
 name: release
-# Al publicar una etiqueta vX.Y.Z: pruebas, empaquetado de la extensión de Claude Desktop y release en GitHub.
+# Al publicar una etiqueta vX.Y.Z: batería completa de test.yml, empaquetado de la extensión de Claude Desktop y release en GitHub.
 # El fichero se llama siempre soundcrate.mcpb, así que este enlace descarga siempre la última versión:
 # https://github.com/C4denaX/soundcrate-mcp/releases/latest/download/soundcrate.mcpb
 on:
@@ -7,32 +7,66 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  # Misma batería que en cada push (matriz de sistemas, almacenes reales, consistencia de versiones y manifest).
+  test:
+    uses: ./.github/workflows/test.yml
+
+  # Empaquetado: sin permisos de escritura y sin credenciales en .git/config.
+  build:
+    needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Tag matches every version field
-        run: |
-          V="${GITHUB_REF_NAME#v}"
-          node -e '
-            const v = process.argv[1], fs = require("fs");
-            const files = { "package.json": "version", "manifest.json": "version", ".claude-plugin/plugin.json": "version" };
-            for (const [f, k] of Object.entries(files)) {
-              const got = JSON.parse(fs.readFileSync(f, "utf8"))[k];
-              if (got !== v) { console.error(`${f}: ${got} != ${v}`); process.exit(1); }
-            }' "$V"
-      - run: npm test
-      - run: npx -y @anthropic-ai/mcpb@2.1.2 pack . soundcrate.mcpb
+        run: node .github/scripts/check-versions.mjs "$GITHUB_REF_NAME"
+      - name: manifest.json tools match server.mjs
+        run: node .github/scripts/check-manifest-tools.mjs
+      # @anthropic-ai/mcpb y sus dependencias van fijados (con integridad) en .github/release-tools/package-lock.json.
+      - run: npm ci --ignore-scripts --prefix .github/release-tools
+      - run: .github/release-tools/node_modules/.bin/mcpb validate manifest.json
+      - run: .github/release-tools/node_modules/.bin/mcpb pack . soundcrate.mcpb
+      - name: The bundle contains only the server and its metadata
+        run: bash .github/scripts/check-bundle.sh soundcrate.mcpb
+      - name: Checksum
+        run: sha256sum soundcrate.mcpb | tee soundcrate.mcpb.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: soundcrate-release
+          path: |
+            soundcrate.mcpb
+            soundcrate.mcpb.sha256
+          if-no-files-found: error
+
+  # Publicación: único job con permisos de escritura; no ejecuta código del repo ni de npm.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write       # attest-build-provenance
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: soundcrate-release
+      - uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: soundcrate.mcpb
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" soundcrate.mcpb \
+          gh release create "$GITHUB_REF_NAME" soundcrate.mcpb soundcrate.mcpb.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
             --title "SoundCrate $GITHUB_REF_NAME" \
-            --notes "Claude Desktop: download **soundcrate.mcpb** and double-click it. Other apps: see the README."
+            --notes "Claude Desktop: download **soundcrate.mcpb** and double-click it. Other apps: see the README. Verify the download with \`sha256sum -c soundcrate.mcpb.sha256\` or \`gh attestation verify soundcrate.mcpb --repo $GITHUB_REPOSITORY\`."

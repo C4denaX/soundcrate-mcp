@@ -213,10 +213,11 @@ const ids = (xs) => xs.map((x) => x.id);
   assert.equal(puts.length, 1, "una sola escritura");
   assert.deepEqual(puts[0].body.tracks.map((t) => t.id), ["2", "4", "1", "5", "3"], "IDs como cadena");
 
-  // Camelot ascendente: 8A(1,5), 8B(2), 4A(3), 9A(4) → 3,1,5,2,4
+  // Camelot ascendente en zigzag (1A 1B 2B 2A 3A 3B 4B 4A…, lote D #10): 4A(3), 8B(2), 8A(1,5), 9A(4) → 3,2,1,5,4.
+  // Antes (8A antes que 8B) quedaba 3,1,5,2,4 y el paso 8A→8B→9A cambiaba número y letra a la vez: un choque armónico.
   reset();
   r = await call("update_playlist", { playlist_id: "10", sort_by: "camelot", direction: "asc" });
-  assert.deepEqual(PL[10].list, ["3", "1", "5", "2", "4"]);
+  assert.deepEqual(PL[10].list, ["3", "2", "1", "5", "4"]);
 
   // Duración descendente (todas iguales: no cambia el orden).
   reset();
