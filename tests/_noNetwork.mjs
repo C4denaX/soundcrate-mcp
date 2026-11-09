@@ -1,22 +1,44 @@
 // Guard de red para las pruebas: ninguna prueba debe salir a internet. Se carga con
 //   node --import ./tests/_noNetwork.mjs tests/testN.mjs
-// y se propaga a los procesos hijos (server.mjs, login.mjs…) mediante NODE_OPTIONS, que heredan.
-// Solo se permiten destinos locales: 127.0.0.1, localhost, ::1 (y *.localhost).
+// (--import existe desde Node 18.18/20.6, así que npm test necesita al menos ese Node; el servidor en sí solo
+// necesita Node >=18, por eso engines no cambia) y se propaga a los procesos hijos (server.mjs, login.mjs…)
+// mediante NODE_OPTIONS, que heredan.
+// Solo se permiten destinos locales: 127.0.0.1, localhost, ::1 (y *.localhost), su forma IPv4-mapped
+// (::ffff:127.0.0.1, que URL normaliza a ::ffff:7f00:1) y las IP de las interfaces propias.
+// Hueco conocido: los procesos hijos que no son Node (curl, etc.) no quedan bloqueados; ninguna prueba lanza uno.
+import dns from "node:dns";
+import dgram from "node:dgram";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import os from "node:os";
 import tls from "node:tls";
 
-const LOCAL = /^(127\.\d+\.\d+\.\d+|localhost|.*\.localhost|::1|::ffff:127\.\d+\.\d+\.\d+)$/i;
+const LOCAL = /^(127\.\d+\.\d+\.\d+|localhost|.*\.localhost|::1)$/i;
 // Las IP de las interfaces propias también cuentan como locales (test11 comprueba que el puerto NO responde ahí).
 const own = () => { try { return new Set(Object.values(os.networkInterfaces()).flat().map((i) => i.address)); } catch { return new Set(); } };
-const isLocal = (h) => { h = String(h ?? "localhost").replace(/^\[|\]$/g, ""); return h === "" || LOCAL.test(h) || own().has(h); };
+// IPv4-mapped en forma decimal (::ffff:127.0.0.1) o hexadecimal (::ffff:7f00:1): las dos son 127.x.x.x.
+const mappedV4 = (h) => {
+  const m = /^::ffff:(.+)$/i.exec(h);
+  if (!m) return null;
+  if (m[1].includes(".")) return m[1];
+  const [a, b] = m[1].split(":").map((x) => parseInt(x, 16));
+  return Number.isInteger(a) && Number.isInteger(b) ? `${(a >> 8) & 255}.${a & 255}.${(b >> 8) & 255}.${b & 255}` : null;
+};
+const isLocal = (h) => {
+  h = String(h ?? "localhost").replace(/^\[|\]$/g, "");
+  if (h === "" || LOCAL.test(h)) return true;
+  const v4 = mappedV4(h);
+  if (v4) return LOCAL.test(v4);
+  return own().has(h);
+};
 // Un intento bloqueado se registra y hace fallar el proceso al salir aunque el código bajo prueba se trague el error
 // (setup.mjs, por ejemplo, captura los fallos de /me): la prueba no puede "pasar" con una petición externa.
 const violations = [];
 process.on("exit", () => { if (violations.length) { console.error(`[noNetwork] ${violations.length} petición(es) externa(s) bloqueada(s): ${violations.join(", ")}`); process.exitCode = 1; } });
 const blocked = (what, host) => { violations.push(host); return new Error(`[noNetwork] petición externa BLOQUEADA en las pruebas: ${what} -> ${host}. Pasa un fetchFn/stub falso o apunta a 127.0.0.1.`); };
+// Para test20, que comprueba el propio guard y bloquea a propósito: borra lo registrado hasta ahora.
+export const noNetworkReset = () => { violations.length = 0; };
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = (input, init) => {
@@ -38,15 +60,49 @@ for (const [mod, name] of [[http, "request"], [http, "get"], [https, "request"],
   const orig = mod[name];
   mod[name] = function (...a) { const h = hostOf(a); if (!isLocal(h)) throw blocked(`${mod === http ? "http" : "https"}.${name}`, h); return orig.apply(this, a); };
 }
+const hostArg = (a) => {
+  const o = a[0];
+  // (port, host) | ({host|servername|path}) | (path de socket unix: local)
+  return typeof o === "object" && o ? (o.host ?? o.servername ?? "localhost") : typeof o === "number" || /^\d+$/.test(String(o)) ? (typeof a[1] === "string" ? a[1] : "localhost") : "localhost";
+};
 for (const [mod, name] of [[net, "connect"], [net, "createConnection"], [tls, "connect"]]) {
   const orig = mod[name];
   mod[name] = function (...a) {
-    const o = a[0];
-    // net.connect(port, host) | net.connect({host}) | net.connect(path) (socket unix: local)
-    const h = typeof o === "object" && o ? (o.host ?? o.servername ?? "localhost") : typeof o === "number" || /^\d+$/.test(String(o)) ? (typeof a[1] === "string" ? a[1] : "localhost") : "localhost";
-    if (!isLocal(h)) throw blocked(`${name}`, h);
+    if (!isLocal(hostArg(a))) throw blocked(`${name}`, hostArg(a));
     return orig.apply(this, a);
   };
+}
+// new net.Socket().connect(...) no pasa por net.connect: mismo filtro en el prototipo.
+const sockConnect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...a) {
+  const h = hostArg(a);
+  if (!isLocal(h)) throw blocked("socket.connect", h);
+  return sockConnect.apply(this, a);
+};
+
+// UDP (dgram): send(msg[, offset, length,] port[, address][, cb]); sin address el destino es localhost.
+const createSocket = dgram.createSocket;
+dgram.createSocket = function (...a) {
+  const s = createSocket.apply(this, a);
+  const send = s.send;
+  s.send = function (msg, ...rest) {
+    const cand = rest.length >= 4 ? rest[3] : rest[1];
+    if (typeof cand === "string" && !isLocal(cand)) throw blocked("dgram.send", cand);
+    return send.call(this, msg, ...rest);
+  };
+  return s;
+};
+
+// DNS: resolver un nombre externo también es salir a la red (y delata el destino aunque luego se bloquee la conexión).
+const guardDns = (orig, name) => function (host, ...rest) {
+  if (!isLocal(host)) throw blocked(`dns.${name}`, host);
+  return orig.call(this, host, ...rest);
+};
+for (const k of ["lookup", ...Object.keys(dns).filter((k) => k.startsWith("resolve"))]) {
+  if (typeof dns[k] === "function") dns[k] = guardDns(dns[k], k);
+}
+for (const k of ["lookup", ...Object.keys(dns.promises).filter((k) => k.startsWith("resolve"))]) {
+  if (typeof dns.promises[k] === "function") dns.promises[k] = guardDns(dns.promises[k], k);
 }
 
 // Herencia en hijos: NODE_OPTIONS lleva el mismo --import (URL file:// absoluta, sin espacios: %20).
