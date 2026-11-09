@@ -6,10 +6,11 @@
 // No incluye descarga ni URLs de streaming (las condiciones de la API lo prohíben) ni borrado de playlists.
 
 import readline from "node:readline";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import * as lib from "./lib.mjs";
-import { startSetup } from "./setup.mjs";
+import { startSetup, stopSetup } from "./setup.mjs";
 
 const SetupError = lib.SetupError;
 const deps = {
@@ -35,43 +36,76 @@ const log = (...a) => process.stderr.write("[soundcrate] " + a.join(" ") + "\n")
 let access = null; // { token, exp }
 let refreshing = null;
 let creds = null; // client_id/secret en memoria: en Windows cada lectura del almacén tarda 1-3 s
+// Refresh token recién rotado que todavía no se ha podido guardar en el almacén (ver refresh()).
+let pendingRt = null;
 
 // Tras configurar o volver a conectar desde start_setup, olvidar lo que hubiera en memoria.
 function resetSession(tok) {
   creds = null;
+  pendingRt = null; // al conectar de nuevo el almacén ya tiene un refresh token nuevo
   access = tok?.access_token ? { token: tok.access_token, exp: Date.now() + ((tok.expires_in || 3600) - 120) * 1000 } : null;
 }
+
+// Guarda el refresh token rotado. Si el almacén falla (Llavero bloqueado, PowerShell lento…) no se pierde la
+// sesión: el token queda en memoria, la llamada en curso sigue y se reintenta la escritura en la siguiente.
+function persistPendingRt() {
+  if (!pendingRt) return;
+  try {
+    deps.secretSet("refresh_token", pendingRt);
+    pendingRt = null;
+  } catch (e) {
+    log("could not save the renewed SoundCloud session yet (will retry on the next call):", String(e?.message || e).slice(0, 200));
+  }
+}
+
+const tokenRejected = (e) => /oauth\/token (400|401)/.test(String(e?.message));
 
 async function refresh() {
   if (refreshing) return refreshing;
   refreshing = (async () => {
-    const rt = deps.secretGet("refresh_token");
+    let rt = pendingRt ?? deps.secretGet("refresh_token");
     if (!rt) throw new SetupError("SoundCrate is not connected to a SoundCloud account yet.");
     const { clientId, clientSecret } = (creds ??= deps.credentials());
+    const exchange = (refresh_token) =>
+      deps.tokenRequest({ grant_type: "refresh_token", client_id: clientId, client_secret: clientSecret, refresh_token });
     let tok;
     try {
-      tok = await deps.tokenRequest({
-        grant_type: "refresh_token",
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: rt,
-      });
+      try {
+        tok = await exchange(rt);
+      } catch (e) {
+        if (!tokenRejected(e)) throw e;
+        // Otro proceso de SoundCrate (otro cliente o sesión) pudo rotar el token antes: si el almacén tiene uno
+        // distinto, el rechazo es un falso positivo y se reintenta una sola vez con el vigente.
+        let cur = null;
+        try {
+          cur = deps.secretGet("refresh_token");
+        } catch {}
+        if (!cur || cur === rt) throw e;
+        pendingRt = null;
+        rt = cur;
+        tok = await exchange(rt);
+      }
     } catch (e) {
-      if (/oauth\/token (400|401)/.test(e.message)) {
+      if (tokenRejected(e)) {
         creds = null;
         throw new SetupError("The saved SoundCloud session or app credentials are no longer valid; the user needs to connect again.");
       }
       throw e;
     }
-    // Los refresh tokens son de un solo uso: guardar siempre el nuevo.
-    if (tok.refresh_token) deps.secretSet("refresh_token", tok.refresh_token);
+    // Primero la sesión en memoria: la llamada en curso funciona aunque falle el guardado.
     access = { token: tok.access_token, exp: Date.now() + ((tok.expires_in || 3600) - 120) * 1000 };
+    // Los refresh tokens son de un solo uso: guardar siempre el nuevo.
+    if (tok.refresh_token) {
+      pendingRt = tok.refresh_token;
+      persistPendingRt();
+    }
     return access.token;
   })().finally(() => (refreshing = null));
   return refreshing;
 }
 
 async function token() {
+  if (pendingRt) persistPendingRt();
   if (access && Date.now() < access.exp) return access.token;
   return refresh();
 }
@@ -79,28 +113,106 @@ async function token() {
 // ---------- API ----------
 const API_ORIGIN = new URL(lib.API).origin;
 
+// Contexto de la petición MCP en curso (para notifications/cancelled): { signal, committed }.
+const requestCtx = new AsyncLocalStorage();
+
+// Error de la API con el código HTTP, para decidir por código y no por texto.
+function apiError(message, status, extra = {}) {
+  return Object.assign(new Error(message), { status }, extra);
+}
+
+// Segundos hasta que se restablece el cupo, según Retry-After (segundos o fecha HTTP) o X-RateLimit-Reset
+// (segundos que faltan, o instante en segundos o milisegundos). Defensivo: no se ha comprobado contra la API real.
+function resetSeconds(headers, now = Date.now()) {
+  const get = (h) => {
+    try {
+      return headers?.get?.(h) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const ra = get("retry-after");
+  if (ra != null && ra !== "") {
+    if (/^\s*\d+(\.\d+)?\s*$/.test(ra)) return Math.ceil(+ra);
+    const d = Date.parse(ra);
+    if (Number.isFinite(d)) return Math.max(0, Math.ceil((d - now) / 1000));
+  }
+  const rs = get("x-ratelimit-reset");
+  if (rs != null && /^\s*\d+(\.\d+)?\s*$/.test(rs)) {
+    const n = +rs;
+    if (n > 1e11) return Math.max(0, Math.ceil((n - now) / 1000)); // milisegundos desde 1970
+    if (n > 1e9) return Math.max(0, Math.ceil(n - now / 1000)); // segundos desde 1970
+    return Math.ceil(n); // segundos que faltan
+  }
+  return null;
+}
+function rateLimitMessage(headers) {
+  const secs = resetSeconds(headers);
+  if (secs == null) {
+    return "SoundCloud rate limit reached; SoundCloud did not say when it resets (search allows about 3,000 requests per hour, likes 500 per 24 hours). Do not retry in this conversation unless the user asks; tell the user.";
+  }
+  const at = new Date(Date.now() + secs * 1000);
+  const hhmm = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  const wait = secs < 90 ? `${secs} s` : secs < 5400 ? `${Math.ceil(secs / 60)} min` : `${Math.round(secs / 360) / 10} h`;
+  return `SoundCloud rate limit reached; it resets in ~${wait} (at ${hhmm}). Do not retry before then; tell the user.`;
+}
+// Rutas que la API ofrece para reproducir o descargar audio: este servidor nunca las toca (ni siquiera con un cursor manipulado).
+const AUDIO_PATH = /\/(streams?|download|preview)\/?$/i;
+
 async function sc(path, { method = "GET", body, retry = true } = {}) {
   const url = path.startsWith("http") ? path : lib.API + path;
+  const parsed = new URL(url);
   // El token solo viaja a la API de SoundCloud: un cursor o next_href manipulado no puede mandarlo a otro sitio.
-  if (new URL(url).origin !== API_ORIGIN) throw new Error(`URL not allowed (only ${API_ORIGIN}).`);
-  const res = await deps.fetch(url, {
-    method,
-    headers: {
-      Authorization: "OAuth " + (await token()),
-      Accept: "application/json; charset=utf-8",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(20000),
-  });
-  if (res.status === 401 && retry) {
-    access = null;
-    return sc(path, { method, body, retry: false });
+  if (parsed.origin !== API_ORIGIN) throw new Error(`URL not allowed (only ${API_ORIGIN}).`);
+  if (AUDIO_PATH.test(parsed.pathname)) throw new Error("URL not allowed: SoundCrate never streams or downloads audio.");
+  // Cancelación (notifications/cancelled): antes de la primera escritura de la petición se aborta sin escribir nada;
+  // una vez iniciada una escritura se deja terminar (y restaurar si hace falta) para no dejar la playlist a medias.
+  const ctx = requestCtx.getStore();
+  const cancelled = () => ctx && !ctx.committed && ctx.signal.aborted;
+  if (cancelled()) throw new Error("The request was cancelled.");
+  const accessToken = await token();
+  if (cancelled()) throw new Error("The request was cancelled.");
+  if (ctx && method !== "GET") ctx.committed = true;
+  const outer = ctx && !ctx.committed ? ctx.signal : null;
+  const ac = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ac.abort();
+  }, 20000);
+  timer.unref?.();
+  const onAbort = () => ac.abort();
+  outer?.addEventListener("abort", onAbort, { once: true });
+  try {
+    let res;
+    try {
+      res = await deps.fetch(url, {
+        method,
+        headers: {
+          Authorization: "OAuth " + accessToken,
+          Accept: "application/json; charset=utf-8",
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: ac.signal,
+      });
+    } catch (e) {
+      if (timedOut) throw apiError("SoundCloud did not answer within 20 seconds.", undefined, { timeout: true });
+      if (outer?.aborted) throw new Error("The request was cancelled.");
+      throw e;
+    }
+    if (res.status === 401 && retry) {
+      access = null;
+      return sc(path, { method, body, retry: false });
+    }
+    const text = await res.text();
+    if (res.status === 429) throw apiError(rateLimitMessage(res.headers), 429);
+    if (!res.ok) throw apiError(`SoundCloud ${method} ${path.split("?")[0]} → ${res.status}: ${text.slice(0, 300)}`, res.status);
+    return text ? JSON.parse(text) : null;
+  } finally {
+    clearTimeout(timer);
+    outer?.removeEventListener("abort", onAbort);
   }
-  const text = await res.text();
-  if (res.status === 429) throw new Error("SoundCloud rate limit reached; wait a moment and retry.");
-  if (!res.ok) throw new Error(`SoundCloud ${method} ${path.split("?")[0]} → ${res.status}: ${text.slice(0, 300)}`);
-  return text ? JSON.parse(text) : null;
 }
 
 const coll = (b) => (b && Array.isArray(b.collection) ? b.collection : Array.isArray(b) ? b : []);
@@ -163,7 +275,7 @@ const LISTEN_NOTE =
   "All can be added to playlists. The API does not report whether the user has Go+.";
 const listenStatus = () =>
   deps.goPlus
-    ? "The user has declared Go+ (SC_GO_PLUS): go_plus and go_plus_probable tracks play in full for them."
+    ? "The user has declared Go+ (SC_GO_PLUS): go_plus plays in full; go_plus_probable usually does but is not guaranteed (region, rights): say so when it matters."
     : "The user has not declared Go+ (SC_GO_PLUS): only 'full' plays in full; go_plus plays a snippet.";
 
 const cleanUrl = (u) => (u ? String(u).split("?")[0] : null);
@@ -218,9 +330,25 @@ const slimUser = (u) => ({
 const ALL_ACCESS = "access=playable%2Cpreview%2Cblocked";
 const clamp = (n, def, max = 200) => Math.min(max, Math.max(1, Number.isFinite(+n) && n != null ? Math.floor(+n) : def));
 
-// Una página de una colección. cursor = next_cursor de una llamada anterior (sc() comprueba que sea de la API).
-async function page(path, params, { limit, cursor, def = 20 }) {
-  if (cursor) return pageOut(await sc(String(cursor)));
+// Un cursor solo vale para la colección que lo generó: su ruta tiene que encajar con la de la herramienta
+// (si no, un cursor manipulado llamaría con el token del usuario a cualquier otro endpoint de la API).
+function checkCursor(cursor, expect) {
+  let u;
+  try {
+    u = new URL(String(cursor));
+  } catch {
+    throw new Error("Invalid cursor: pass the next_cursor value from a previous call of the same tool.");
+  }
+  if (u.origin !== API_ORIGIN) throw new Error(`URL not allowed (only ${API_ORIGIN}).`);
+  if (!expect.test(u.pathname)) {
+    throw new Error("Invalid cursor for this tool: pass the next_cursor value from a previous call of the same tool.");
+  }
+  return u.href;
+}
+
+// Una página de una colección. cursor = next_cursor de una llamada anterior de la MISMA herramienta (`expect`: su ruta).
+async function page(path, params, { limit, cursor, def = 20, expect }) {
+  if (cursor) return pageOut(await sc(checkCursor(cursor, expect)));
   const q = new URLSearchParams({ ...params, limit: String(clamp(limit, def)), linked_partitioning: "true" });
   return pageOut(await sc(`${path}?${q}`));
 }
@@ -238,20 +366,30 @@ function range(p, field, from, to, fmt) {
   if (to != null && to !== "") p[`${field}[to]`] = fmt(to, true);
 }
 
-// page() pidiendo también las pistas preview/blocked. Si la API rechaza el parámetro, repite sin él.
+// La API rechaza un parámetro que no entiende con 400 o 422. Solo en ese caso tiene sentido repetir sin él:
+// un 429, un 5xx o un timeout se repetirían en el acto o devolverían resultados recortados sin avisar.
+const accessRejected = (e) => e?.status === 400 || e?.status === 422;
+
+// page() pidiendo también las pistas preview/blocked. Si la API rechaza el parámetro, repite sin él y lo marca
+// (fallback: true) para que la herramienta avise de que faltan las pistas blocked.
 async function pageAccess(path, params, opts, include = true) {
   if (!include || opts.cursor) return page(path, params, opts);
   try {
     return await page(path, { ...params, access: "playable,preview,blocked" }, opts);
   } catch (e) {
-    if (/límite de peticiones|→ 40[134]/.test(e.message)) throw e;
-    return page(path, params, opts);
+    if (!accessRejected(e)) throw e;
+    return { ...(await page(path, params, opts)), fallback: true };
   }
 }
+const FALLBACK_NOTE = {
+  access_filter: "api_default",
+  note: "SoundCloud rejected the access filter, so this list only has playable and preview tracks (blocked ones are missing). Try again later for the full list.",
+};
+const withFallback = (r) => (r.fallback ? FALLBACK_NOTE : {});
 
 // /me/followings/tracks se pagina con offset, no con next_href: el cursor es la URL de la página siguiente.
 async function followingsTracks(limit, cursor) {
-  let url = cursor ? String(cursor) : null;
+  let url = cursor ? checkCursor(cursor, /^\/me\/followings\/tracks\/?$/) : null;
   if (!url) {
     const q = new URLSearchParams({ limit: String(clamp(limit, 20)), offset: "0", access: "playable,preview,blocked" });
     url = `${lib.API}/me/followings/tracks?${q}`;
@@ -436,9 +574,14 @@ const tally = (xs) => xs.reduce((m, x) => ((m[x] = (m[x] || 0) + 1), m), {});
 const topN = (obj, n) => Object.fromEntries(Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n));
 
 const releaseKey = (t) => (t.release_year ? t.release_year * 10000 + (t.release_month || 0) * 100 + (t.release_day || 0) : null);
+// Orden "en zigzag" por la rueda: 1A 1B 2B 2A 3A 3B 4B 4A… Dentro de cada número va primero la letra por la que
+// se entra desde el número anterior (A en los impares, B en los pares), así cada paso entre números contiguos
+// conserva la letra (compatible según harmonicMatch). El orden "1A 1B 2A 2B…" cambia número y letra a la vez.
 const camelotKey = (t) => {
   const k = camKey(camelot(t.key_signature));
-  return k ? k.n * 2 + (k.l === "B" ? 1 : 0) : null;
+  if (!k) return null;
+  const first = k.n % 2 ? "A" : "B";
+  return k.n * 2 + (k.l === first ? 0 : 1);
 };
 const SORTS = { bpm: (t) => t.bpm || null, duration: (t) => t.duration || null, released: releaseKey, camelot: camelotKey };
 
@@ -507,6 +650,36 @@ const CLIENT_CONFIG = {
   "Codex CLI": '~/.codex/config.toml → [mcp_servers.<name>] env = { SC_GO_PLUS = "1" }',
   "Gemini CLI": '~/.gemini/settings.json → mcpServers.<name>.env: { "SC_GO_PLUS": "1" }',
 };
+
+// Cómo se instaló SoundCrate. El .mcpb de Claude Desktop y el plugin de Claude Code no tienen una entrada en la
+// configuración del cliente que el usuario pueda editar: su SC_GO_PLUS sale de un interruptor de la extensión o del
+// plugin. SOUNDCRATE_DIST=mcpb|plugin lo marca (manifest.json / .mcp.json); como respaldo se reconoce el plugin por
+// CLAUDE_PLUGIN_ROOT y la extensión por su carpeta ("Claude Extensions"). Sin marca: instalación manual o npx.
+function installKind(env = process.env) {
+  const d = String(env.SOUNDCRATE_DIST || "").toLowerCase();
+  if (d === "mcpb" || d === "plugin") return d;
+  if (env.CLAUDE_PLUGIN_ROOT) return "plugin";
+  try {
+    if (/[\\/]Claude Extensions[\\/]/.test(decodeURIComponent(new URL(import.meta.url).pathname))) return "mcpb";
+  } catch {}
+  return "manual";
+}
+const GO_PLUS_SWITCH = {
+  mcpb: 'In Claude Desktop: Settings > Extensions > SoundCrate, turn on "I have SoundCloud Go+" (the extension restarts by itself). Do not edit claude_desktop_config.json: the extension has no entry there and a manual one would start a second SoundCrate server.',
+  plugin: "In Claude Code: run /plugin, open soundcrate and set its go_plus option (it asks to reload). Do not add another MCP server with claude mcp add or .mcp.json: that would start a second SoundCrate.",
+};
+// Qué decirle al usuario para declarar Go+, según cómo instaló SoundCrate.
+function goPlusHow() {
+  const kind = installKind();
+  if (GO_PLUS_SWITCH[kind]) return ["Ask the user if they have SoundCloud Go+. If yes:", GO_PLUS_SWITCH[kind]];
+  return [
+    "Ask the user if they have SoundCloud Go+. If yes, add the environment variable SC_GO_PLUS=1 to this MCP server in their client configuration and restart the client.",
+    CLIENT_CONFIG,
+  ];
+}
+
+// start_setup: cómo terminó la última página de configuración (para decir que caducó).
+let lastSetupEnd = null;
 
 async function buildStatus(verify) {
   const steps = [];
@@ -579,18 +752,17 @@ async function buildStatus(verify) {
     ...(deps.goPlus
       ? {}
       : {
-          how: [
-            "Ask the user if they have SoundCloud Go+. If yes, add the environment variable SC_GO_PLUS=1 to this MCP server in their client configuration and restart the client.",
-            CLIENT_CONFIG,
-          ],
+          how: goPlusHow(),
         }),
   });
 
   const required = steps.filter((x) => x.id !== "go_plus");
   const ready = required.every((x) => x.status === "done") && (!verify || !!user);
   const next = steps.find((x) => x.status === "todo" || x.status === "error") || null;
+  const expired = !ready && lastSetupEnd?.reason === "timeout";
   return {
     ready,
+    ...(expired ? { setup_page_expired: "The setup page closed after 20 minutes without being finished. Call start_setup again to get a new one." } : {}),
     ...(user ? { connected_as: user } : {}),
     platform: process.platform,
     node: process.version,
@@ -623,15 +795,22 @@ const TOOLS = {
       properties: { open_browser: { type: "boolean", description: "Default true. Set false to only get the URL (e.g. when the browser is on another machine)." } },
     },
     run: async ({ open_browser = true }) => {
-      const s = await deps.startSetup({ open: open_browser !== false, onSuccess: (r) => resetSession(r) });
+      const s = await deps.startSetup({ open: open_browser !== false, onSuccess: (r) => resetSession(r), onCredentialsChanged: () => resetSession(null) });
+      if (!s.already_running) {
+        lastSetupEnd = null;
+        s.done?.then?.((r) => (lastSetupEnd = r));
+      }
+      // La URL va siempre: aunque el navegador se haya abierto, la pestaña puede cerrarse o estar en otra máquina.
       return {
         url: s.url,
         browser_opened: !!s.opened,
         already_running: !!s.already_running,
         secure_storage: s.store,
-        tell_user: s.opened
-          ? "A setup page has opened in your browser. Follow the three steps there; when SoundCloud sends you back and the page says it is connected, tell me."
-          : `Open this page in your browser on this computer and follow the three steps: ${s.url}`,
+        tell_user: !s.opened
+          ? `Open this page in your browser on this computer and follow the three steps: ${s.url}`
+          : s.already_running
+            ? `The setup page was already running and has been opened again in your browser. If you do not see it, open this link: ${s.url}. Follow the three steps there; when SoundCloud sends you back and the page says it is connected, tell me.`
+            : `A setup page has opened in your browser (if you do not see it, open this link: ${s.url}). Follow the three steps there; when SoundCloud sends you back and the page says it is connected, tell me.`,
         next: "When the user says they finished, call setup_status to confirm everything is ready.",
       };
     },
@@ -640,7 +819,7 @@ const TOOLS = {
     description:
       "Search tracks by text and/or filters (genres, tags, BPM, duration, upload date). Returns id, title, user, BPM, key, Camelot, genre, label, release date, plays, likes, access and listen. " +
       LISTEN_NOTE +
-      " only_listenable=true keeps only tracks the user can play in full. Tracks without bpm are dropped when filtering by BPM. " +
+      " only_listenable=true keeps full and, with Go+ declared, go_plus and go_plus_probable (likely, not guaranteed; to be sure use listen full or go_plus). Tracks without bpm are dropped when filtering by BPM. " +
       "For the next page, pass next_cursor as cursor.",
     inputSchema: {
       type: "object",
@@ -659,7 +838,7 @@ const TOOLS = {
           type: "boolean",
           description: "Include preview/blocked tracks as well as playable ones (default true)",
         },
-        only_listenable: { type: "boolean", description: "Only tracks the user can play in full on SoundCloud" },
+        only_listenable: { type: "boolean", description: "Keep full and, with Go+ declared, go_plus and go_plus_probable (the latter is likely, not guaranteed)" },
         cursor: { type: "string", description: "next_cursor from a previous call, for the next page" },
       },
     },
@@ -674,7 +853,7 @@ const TOOLS = {
       range(p, "bpm", a.bpm_min, a.bpm_max, (x, end) => String(end ? Math.ceil(+x) : Math.floor(+x)));
       range(p, "duration", a.duration_min_s, a.duration_max_s, (x) => String(Math.round(+x * 1000)));
       range(p, "created_at", a.uploaded_after, a.uploaded_before, (x, end) => day(x) + (end ? " 23:59:59" : " 00:00:00"));
-      const r = await pageAccess("/tracks", p, { limit, cursor, def: 10 }, include_restricted);
+      const r = await pageAccess("/tracks", p, { limit, cursor, def: 10, expect: /^\/tracks\/?$/ }, include_restricted);
       let tracks = r.items.map(slimTrack);
       // El filtro de BPM de la API es aproximado (deja pasar ~10 % fuera de rango): se aplica aquí de forma estricta.
       const cq = cursor ? new URL(String(cursor)).searchParams : null;
@@ -695,6 +874,7 @@ const TOOLS = {
         tracks,
         ...(out_of_range ? { out_of_range_removed: out_of_range } : {}),
         ...(not_listenable ? { not_listenable_removed: not_listenable } : {}),
+        ...withFallback(r),
         next_cursor: r.next_cursor,
       };
     },
@@ -726,7 +906,7 @@ const TOOLS = {
     },
     run: async ({ track_id, url, limit, exclude_playlist_id, include_restricted = true, cursor }) => {
       const seed = cursor ? null : (await resolveId("track", track_id, url)).id;
-      const r = await pageAccess(`/tracks/${seed}/related`, {}, { limit, cursor }, include_restricted);
+      const r = await pageAccess(`/tracks/${seed}/related`, {}, { limit, cursor, expect: /^\/tracks\/[^/]+\/related\/?$/ }, include_restricted);
       let tracks = r.items.map(slimTrack).filter((t) => t.id !== seed);
       let excluded;
       if (exclude_playlist_id) {
@@ -735,7 +915,7 @@ const TOOLS = {
         excluded = tracks.filter((t) => have.has(t.id)).length;
         tracks = tracks.filter((t) => !have.has(t.id));
       }
-      return { tracks, ...(excluded !== undefined ? { excluded } : {}), next_cursor: r.next_cursor };
+      return { tracks, ...(excluded !== undefined ? { excluded } : {}), ...withFallback(r), next_cursor: r.next_cursor };
     },
   },
   get_my_tracks: {
@@ -754,19 +934,19 @@ const TOOLS = {
       switch (source) {
         case "likes":
         case "reposts": {
-          const r = await pageAccess(`/me/${source}/tracks`, {}, { limit, cursor });
-          return { tracks: r.items.map(slimTrack), next_cursor: r.next_cursor };
+          const r = await pageAccess(`/me/${source}/tracks`, {}, { limit, cursor, expect: new RegExp(`^/me/${source}/tracks/?$`) });
+          return { tracks: r.items.map(slimTrack), ...withFallback(r), next_cursor: r.next_cursor };
         }
         case "recently_played": {
-          const r = await pageAccess(`/me/recently-played/tracks`, {}, { limit: 25, cursor, def: 25 });
-          return { tracks: r.items.map(slimTrack) };
+          const r = await pageAccess(`/me/recently-played/tracks`, {}, { limit: 25, cursor, def: 25, expect: /^\/me\/recently-played\/tracks\/?$/ });
+          return { tracks: r.items.map(slimTrack), ...withFallback(r) };
         }
         case "feed": {
-          const r = await pageAccess(`/me/feed/tracks`, {}, { limit, cursor });
+          const r = await pageAccess(`/me/feed/tracks`, {}, { limit, cursor, expect: /^\/me\/feed\/tracks\/?$/ });
           const tracks = r.items
             .filter((x) => x?.origin && !Array.isArray(x.origin.tracks) && x.origin.kind !== "playlist")
             .map((x) => ({ ...slimTrack(x.origin), activity: x.type, activity_at: String(x.created_at || "").slice(0, 10) || null }));
-          return { tracks, next_cursor: r.next_cursor };
+          return { tracks, ...withFallback(r), next_cursor: r.next_cursor };
         }
         case "followings":
           return followingsTracks(limit, cursor);
@@ -783,7 +963,7 @@ const TOOLS = {
       required: ["query"],
     },
     run: async ({ query, limit, cursor }) => {
-      const r = await page(`/users`, { q: query }, { limit, cursor, def: 10 });
+      const r = await page(`/users`, { q: query }, { limit, cursor, def: 10, expect: /^\/users\/?$/ });
       return { users: r.items.map(slimUser), next_cursor: r.next_cursor };
     },
   },
@@ -795,7 +975,7 @@ const TOOLS = {
     },
     run: async ({ user_id, url, limit, cursor }) => {
       const uid = cursor ? null : (await resolveId("user", user_id, url)).id;
-      const r = await page(`/users/${uid}/related`, {}, { limit, cursor, def: 20 });
+      const r = await page(`/users/${uid}/related`, {}, { limit, cursor, def: 20, expect: /^\/users\/[^/]+\/related\/?$/ });
       return { users: r.items.map(slimUser), next_cursor: r.next_cursor };
     },
   },
@@ -818,14 +998,15 @@ const TOOLS = {
       const { id: uid, obj } = cursor ? { id: null, obj: null } : await resolveId("user", user_id, url);
       const who = obj ? { user: slimUser(obj) } : {};
       if (kind === "playlists") {
-        const r = await pageAccess(`/users/${uid}/playlists`, { show_tracks: "false" }, { limit, cursor });
-        return { ...who, playlists: r.items.map(slimPlaylist), next_cursor: r.next_cursor };
+        const r = await pageAccess(`/users/${uid}/playlists`, { show_tracks: "false" }, { limit, cursor, expect: /^\/users\/[^/]+\/playlists\/?$/ });
+        return { ...who, playlists: r.items.map(slimPlaylist), ...withFallback(r), next_cursor: r.next_cursor };
       }
       const path = { tracks: "tracks", likes: "likes/tracks", reposts: "reposts/tracks" }[kind];
       if (!path) throw new Error("kind must be tracks, likes, reposts or playlists.");
       const extra = kind === "tracks" ? { sort: sort === "oldest" ? "asc" : "desc" } : {};
-      const r = await pageAccess(`/users/${uid}/${path}`, extra, { limit, cursor });
-      return { ...who, tracks: r.items.map(slimTrack), next_cursor: r.next_cursor };
+      const expect = new RegExp(`^/users/[^/]+/${path}/?$`);
+      const r = await pageAccess(`/users/${uid}/${path}`, extra, { limit, cursor, expect });
+      return { ...who, tracks: r.items.map(slimTrack), ...withFallback(r), next_cursor: r.next_cursor };
     },
   },
   search_playlists: {
@@ -836,8 +1017,8 @@ const TOOLS = {
       required: ["query"],
     },
     run: async ({ query, limit, cursor }) => {
-      const r = await pageAccess(`/playlists`, { q: query, show_tracks: "false" }, { limit, cursor, def: 10 });
-      return { playlists: r.items.map(slimPlaylist), next_cursor: r.next_cursor };
+      const r = await pageAccess(`/playlists`, { q: query, show_tracks: "false" }, { limit, cursor, def: 10, expect: /^\/playlists\/?$/ });
+      return { playlists: r.items.map(slimPlaylist), ...withFallback(r), next_cursor: r.next_cursor };
     },
   },
   get_station: {
@@ -847,13 +1028,15 @@ const TOOLS = {
     run: async ({ station_id }) => {
       const sid = String(station_id || "").trim();
       if (!/^[a-z0-9-]+(:[A-Za-z0-9_-]+)+$/.test(sid)) throw new Error("Invalid station_id.");
-      let p;
+      let p, fallback = false;
       try {
         p = await sc(`/system-playlists/${encodeURIComponent(sid)}?${ALL_ACCESS}`);
-      } catch {
+      } catch (e) {
+        if (!accessRejected(e)) throw e; // 429, 5xx, timeout, 401/403/404: no repetir sin 'access' (daría una lista recortada sin avisar)
+        fallback = true;
         p = await sc(`/system-playlists/${encodeURIComponent(sid)}`);
       }
-      return { ...slimStation(p), tracks: (p.tracks || []).map(slimTrack) };
+      return { ...slimStation(p), ...(fallback ? FALLBACK_NOTE : {}), tracks: (p.tracks || []).map(slimTrack) };
     },
   },
   whoami: {
@@ -870,7 +1053,9 @@ const TOOLS = {
         subscriptions: (me.subscriptions || []).map((x) => ({ id: x?.product?.id ?? null, name: x?.product?.name ?? null })),
         token_refreshed: !!force_refresh,
         go_plus_declared: !!deps.goPlus,
-        note: "The API does not report Go+ (subscriptions only lists creator plans). Declare it with SC_GO_PLUS=1 in the server configuration.",
+        note: `The API does not report Go+ (subscriptions only lists creator plans). ${
+          GO_PLUS_SWITCH[installKind()] || "Declare it with SC_GO_PLUS=1 in the server configuration (setup_status says where)."
+        }`,
       };
     },
   },
@@ -900,18 +1085,43 @@ const TOOLS = {
     },
   },
   get_playlist: {
-    description: "A playlist with its tracks, the user's own or another user's public one. By id or soundcloud.com URL.",
-    inputSchema: { type: "object", properties: { playlist_id: { type: "string" }, url: { type: "string" } } },
-    run: async ({ playlist_id, url }) => {
+    description:
+      "A playlist with its tracks, the user's own or another user's public one. By id or soundcloud.com URL. " +
+      "Returns up to 'limit' tracks (default 100, max 200) starting at 'offset', each with its 1-based 'position', plus total and next_offset (null when there are no more); pass next_offset as offset for the next page. " +
+      "compact=true returns only position, id, title, user, bpm, camelot and listen per track (about a third of the size). " +
+      "Big playlists are expensive to read: for duplicates, BPM jumps or key clashes use analyze_playlist, and to reorder use update_playlist with sort_by; neither needs the whole list.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        playlist_id: { type: "string" },
+        url: { type: "string" },
+        offset: { type: "integer", minimum: 0, description: "Position of the first track to return, counting from 0 (default 0)" },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum tracks to return (default 100)" },
+        compact: { type: "boolean", description: "Only position, id, title, user, bpm, camelot and listen per track" },
+      },
+    },
+    run: async ({ playlist_id, url, offset, limit, compact }) => {
       const { id } = await resolveId("playlist", playlist_id, url);
       const { p, tracks, hidden } = await getPlaylistFull(id);
+      const from = Math.max(0, Math.floor(num(offset) ?? 0));
+      const n = clamp(limit, 100, 200);
+      const slice = tracks.slice(from, from + n).map((t, i) => {
+        const full = slimTrack(t);
+        const item = compact === true ? { id: full.id, title: full.title, user: full.user, bpm: full.bpm, camelot: full.camelot, listen: full.listen } : full;
+        return { position: from + i + 1, ...item };
+      });
+      const end = from + slice.length;
       return {
         ...slimPlaylist(p),
         ...(p.description ? { description: String(p.description).slice(0, 300) } : {}),
         ...(p.genre ? { genre: p.genre } : {}),
         ...(p.tag_list ? { tags: String(p.tag_list).slice(0, 200) } : {}),
         ...(hidden ? { hidden_by_api: hidden, note: "The API does not return every track of this playlist." } : {}),
-        tracks: tracks.map(slimTrack),
+        total: tracks.length,
+        offset: from,
+        returned: slice.length,
+        next_offset: end < tracks.length ? end : null,
+        tracks: slice,
       };
     },
   },
@@ -935,7 +1145,7 @@ const TOOLS = {
         body: {
           playlist: {
             title,
-            sharing: pub ? "public" : "private",
+            sharing: pub === true ? "public" : "private", // solo un true inequívoco publica
             ...(description ? { description } : {}),
             tracks: wanted.map((id) => ({ id })),
           },
@@ -1062,7 +1272,7 @@ const TOOLS = {
         duration_max_s: { type: "integer" },
         genres: { type: "array", items: { type: "string" }, description: "Filter by genre (case-insensitive)" },
         include_restricted: { type: "boolean", description: "Include preview/blocked. Default true" },
-        only_listenable: { type: "boolean", description: "Only tracks the user can play in full on SoundCloud" },
+        only_listenable: { type: "boolean", description: "Keep full and, with Go+ declared, go_plus and go_plus_probable (the latter is likely, not guaranteed)" },
       },
       required: ["seed_track_ids"],
     },
@@ -1080,8 +1290,10 @@ const TOOLS = {
       for (const s of seeds) seedRaw.push(await sc(`/tracks/${s}`));
       const seedSet = new Set(seeds);
       const pool = new Map();
+      let fallback = false;
       for (const s of seeds) {
         const r = await pageAccess(`/tracks/${s}/related`, {}, { limit: 30 }, include);
+        if (r.fallback) fallback = true;
         for (const t of r.items) {
           const id = rid(t);
           if (!id || seedSet.has(id) || exclude.has(id)) continue;
@@ -1123,6 +1335,7 @@ const TOOLS = {
       const tracks = cands.slice(0, limit).map((c) => ({ ...c.t, suggested_by: c.count, harmonic_with_seed: c.harmonic }));
       return {
         seeds: seedRaw.map(slimTrack),
+        ...(fallback ? FALLBACK_NOTE : {}),
         tracks,
         stats: { pool: pool.size, dropped, returned: tracks.length, ...(cands.length > limit ? { more: cands.length - limit } : {}) },
       };
@@ -1189,7 +1402,7 @@ const TOOLS = {
         out.push({ ...slimTrack(raw), score, reasons, likely_official: sameIsrc || (!!raw.label_name && cArtist === aNorm) });
       }
       out.sort((x, y) => y.score - x.score);
-      return { original: slimTrack(o), candidates: out.slice(0, clamp(limit, 5, 20)) };
+      return { original: slimTrack(o), ...withFallback(r), candidates: out.slice(0, clamp(limit, 5, 20)) };
     },
   },
   analyze_playlist: {
@@ -1321,7 +1534,8 @@ const CAPABILITIES = { tools: { listChanged: false } };
 const CACHE = { ttlMs: 300000, cacheScope: "private" }; // las descripciones dependen de SC_GO_PLUS
 const SETUP_NOTE =
   "If the user is new to SoundCrate or a tool says it is not set up, call setup_status and guide them step by step; " +
-  "start_setup opens a local page where they enter their credentials, so never ask for secrets in the chat.";
+  "start_setup opens a local page where they enter their credentials, so never ask for secrets in the chat. " +
+  "If the user has Go+, setup_status says how to declare it for their install: extension and plugin have a switch in their settings, so do not tell them to edit config files.";
 const instructions = () => `${SETUP_NOTE} ${LISTEN_NOTE} ${listenStatus()}`;
 
 // Títulos y anotaciones: los clientes los usan para pedir confirmación antes de las escrituras.
@@ -1370,6 +1584,100 @@ export function listTools() {
   });
 }
 
+// ---------- Validación de argumentos ----------
+// Los clientes (sobre todo con modelos pequeños o locales) mandan a menudo los booleanos y los números como texto
+// ("false", "5") y las listas como texto ("1,2" o '["1","2"]'). Cada argumento se convierte al tipo de su inputSchema o,
+// si no encaja, se rechaza con un error claro antes de ejecutar nada (así "public":"false" no publica una playlist).
+// null y "" se tratan como argumento omitido. Lo que no está en el esquema se deja pasar. Los límites minimum y
+// maximum no se aplican aquí: las herramientas acotan limit y validan position por su cuenta.
+const shown = (v) => {
+  const t = typeof v === "string" ? JSON.stringify(v) : Array.isArray(v) ? "an array" : v !== null && typeof v === "object" ? "an object" : String(v);
+  return t.length > 40 ? t.slice(0, 37) + "…" : t;
+};
+function coerceArg(name, v, sch) {
+  const bad = (expected) => {
+    throw new Error(`Argument "${name}": expected ${expected}, got ${shown(v)}.`);
+  };
+  if (sch.enum) {
+    const x = typeof v === "string" ? v.trim() : v;
+    const hit = sch.enum.find((e) => e === x) ?? (typeof x === "string" ? sch.enum.find((e) => String(e).toLowerCase() === x.toLowerCase()) : undefined);
+    if (hit === undefined) throw new Error(`${name} must be one of ${sch.enum.join(", ")} (got ${shown(v)}).`);
+    return hit;
+  }
+  switch (sch.type) {
+    case "boolean": {
+      if (typeof v === "boolean") return v;
+      const x = String(v).trim().toLowerCase();
+      if (typeof v === "string" || typeof v === "number") {
+        if (["true", "1", "yes", "si", "sí"].includes(x)) return true;
+        if (["false", "0", "no"].includes(x)) return false;
+      }
+      return bad("a boolean (true or false)");
+    }
+    case "integer":
+    case "number": {
+      const n = typeof v === "number" ? v : typeof v === "string" && /^\s*[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?\s*$/i.test(v) ? Number(v) : NaN;
+      if (!Number.isFinite(n)) return bad(sch.type === "integer" ? "a whole number" : "a number");
+      if (sch.type === "integer" && !Number.isInteger(n)) return bad("a whole number");
+      return n;
+    }
+    case "string": {
+      if (typeof v === "string") return v;
+      if (typeof v === "number" && Number.isFinite(v)) return String(v); // ids numéricos
+      return bad("text");
+    }
+    case "array": {
+      let arr = typeof v === "number" && Number.isFinite(v) ? [String(v)] : v; // un id suelto
+      if (typeof arr === "string") {
+        const t = arr.trim();
+        if (t.startsWith("[")) {
+          try {
+            const j = JSON.parse(t);
+            if (Array.isArray(j)) arr = j;
+          } catch {}
+        }
+        if (typeof arr === "string") arr = t.split(",").map((x) => x.trim()).filter(Boolean);
+      }
+      if (!Array.isArray(arr)) return bad("a list (an array, or text like \"1,2\")");
+      const it = sch.items || {};
+      return arr.map((x, i) => {
+        if (it.type === "string") {
+          if (typeof x === "string") return x;
+          if (typeof x === "number" && Number.isFinite(x)) return String(x);
+          throw new Error(`Argument "${name}": item ${i + 1} must be text or a number, got ${shown(x)}.`);
+        }
+        return x;
+      });
+    }
+    default:
+      return v;
+  }
+}
+function coerceArgs(schema, args) {
+  const out = { ...args };
+  const props = schema?.properties || {};
+  const problems = [];
+  for (const [name, sch] of Object.entries(props)) {
+    let v = out[name];
+    // null, y un texto vacío salvo en campos de texto libre (donde "" puede ser un valor: vaciar una descripción), cuentan como omitidos.
+    if (v === null || (typeof v === "string" && !v.trim() && (sch.type !== "string" || sch.enum))) {
+      delete out[name];
+      v = undefined;
+    }
+    if (v === undefined) continue;
+    try {
+      out[name] = coerceArg(name, v, sch);
+    } catch (e) {
+      problems.push(e.message);
+    }
+  }
+  for (const name of schema?.required || []) {
+    if (out[name] === undefined) problems.push(`Missing required argument "${name}".`);
+  }
+  if (problems.length) throw new Error(`Invalid arguments. ${problems.join(" ")} Nothing was done.`);
+  return out;
+}
+
 // Un error de configuración lleva al agente a setup_status, que le da los pasos para guiar al usuario.
 function errorText(e) {
   const msg = String(e?.message || e);
@@ -1377,6 +1685,8 @@ function errorText(e) {
   const fix = e.fix ? ` How to fix it: ${[].concat(e.fix).join("; ")}.` : "";
   return `${msg}${fix} Call the setup_status tool to get step-by-step instructions, and guide the user through them.`;
 }
+
+const inflight = new Map(); // id de la petición tools/call en curso → AbortController
 
 export async function handle(msg) {
   if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
@@ -1389,7 +1699,11 @@ export async function handle(msg) {
     if ("result" in msg || "error" in msg) return null;
     return { jsonrpc: "2.0", id: isRequest ? id : null, error: { code: -32600, message: "Invalid Request" } };
   }
-  if (!isRequest) return null; // notificaciones: notifications/initialized, notifications/cancelled…
+  if (!isRequest) {
+    // notifications/cancelled: aborta la petición en curso (ver sc()); su respuesta no se envía. El resto se ignora.
+    if (method === "notifications/cancelled") inflight.get(params?.requestId)?.abort();
+    return null;
+  }
 
   const requested = params?._meta?.[META_VERSION];
   const modern = requested !== undefined && method !== "initialize";
@@ -1437,12 +1751,20 @@ export async function handle(msg) {
         const t = TOOLS[params?.name];
         if (!t) return fail(-32602, `Unknown tool: ${params?.name}`);
         const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments) ? params.arguments : {};
+        const ac = new AbortController();
+        const ctx = { signal: ac.signal, committed: false };
+        inflight.set(id, ac);
+        let result;
         try {
-          const out = await t.run(args);
-          return reply({ content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
+          const out = await requestCtx.run(ctx, () => t.run(coerceArgs(t.inputSchema, args)));
+          result = { content: [{ type: "text", text: JSON.stringify(out) }] };
         } catch (e) {
-          return reply({ isError: true, content: [{ type: "text", text: errorText(e) }] });
+          result = { isError: true, content: [{ type: "text", text: errorText(e) }] };
+        } finally {
+          if (inflight.get(id) === ac) inflight.delete(id);
         }
+        // Petición cancelada por el cliente: no se envía ninguna respuesta.
+        return ac.signal.aborted ? null : reply(result);
       }
       // Sin recursos ni prompts, pero algunos clientes los piden igualmente: listas vacías en vez de error.
       case "resources/list":
@@ -1473,6 +1795,15 @@ function isMain() {
 if (isMain()) {
   const write = (m) => process.stdout.write(JSON.stringify(m) + "\n");
   const rl = readline.createInterface({ input: process.stdin });
+  let pending = 0;
+  let inputClosed = false;
+  // Con stdin cerrado el cliente se ha ido: tras terminar lo que haya en curso se cierra la página de configuración
+  // (si la hay) para no dejar un proceso huérfano con el puerto ocupado.
+  const maybeExit = () => {
+    if (!inputClosed || pending > 0) return;
+    stopSetup();
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
   rl.on("line", async (line) => {
     if (!line.trim()) return;
     let msg;
@@ -1484,8 +1815,18 @@ if (isMain()) {
     if (Array.isArray(msg)) {
       return write({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Batch requests are not supported" } });
     }
-    const out = await handle(msg);
-    if (out) write(out);
+    pending++;
+    try {
+      const out = await handle(msg);
+      if (out) write(out);
+    } finally {
+      pending--;
+      maybeExit();
+    }
+  });
+  rl.on("close", () => {
+    inputClosed = true;
+    maybeExit();
   });
   log(`ready (v${VERSION}, Go+ ${deps.goPlus ? "declared" : "not declared"})`);
 }

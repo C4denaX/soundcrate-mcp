@@ -128,6 +128,11 @@ button,.btn{display:inline-block;margin-top:14px;padding:10px 18px;border:0;bord
 
 let active = null; // una sola página de configuración por proceso
 
+// Cierra la página de configuración activa, sea quien sea el que la abrió (no hace nada si no hay ninguna).
+export function stopSetup() {
+  active?.stop?.();
+}
+
 export async function startSetup({
   store = lib.store(),
   credentials = lib.credentials,
@@ -372,6 +377,12 @@ export async function startSetup({
   active = {
     info,
     done,
+    // Cierra la página y el servidor ya (no a los 1,5 s de finish): lo usa server.mjs cuando el cliente cierra stdin.
+    stop: () => {
+      finish({ ok: false, reason: "closed" });
+      server.close();
+      server.closeAllConnections?.();
+    },
     // Para login.mjs: si el navegador no vuelve a la página, el usuario pega la URL de retorno.
     completeFromUrl: async (pasted) => {
       const p = new URL(pasted);

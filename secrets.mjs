@@ -255,12 +255,20 @@ export function defaultFilePath(env = process.env, platform = process.platform, 
 function fileStore({ service, env, platform, fs = nodeFs }) {
   const file = defaultFilePath(env, platform);
   const read = () => {
+    // Un fichero mal formado no debe volcar su contenido en el error: el SyntaxError de JSON.parse cita un trozo
+    // del texto (puede ser un secreto) y el mensaje llega al agente y al historial del chat.
+    const invalid = () =>
+      new Error(`Could not read ${file}: the file is not valid JSON (fix or delete it and run the setup again).`);
+    let data;
     try {
-      return JSON.parse(fs.readFileSync(file, "utf8"));
+      data = JSON.parse(fs.readFileSync(file, "utf8"));
     } catch (e) {
       if (e.code === "ENOENT") return {};
+      if (e instanceof SyntaxError || !e.code) throw invalid();
       throw new Error(`Could not read ${file}: ${e.message}`);
     }
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw invalid();
+    return data;
   };
   const write = (data) => {
     fs.mkdirSync(nodePath.dirname(file), { recursive: true, mode: 0o700 });
